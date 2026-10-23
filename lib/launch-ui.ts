@@ -1,0 +1,227 @@
+import { DESCRIPTION, type Strategy } from "./strategy";
+
+/** Public statuses exposed by the canonical launch service. */
+export type LaunchPhase =
+  "preparing" | "funding" | "deploying" | "live" | "failed";
+
+export interface PublicLaunchStatus {
+  uid: string;
+  status: LaunchPhase;
+  name: string;
+  symbol: string;
+  fundingWallet: string;
+  requiredLamports: number;
+  receivedLamports: number;
+  mint: string;
+  launchSignature: string;
+  error: string;
+}
+
+export interface LaunchFormFields {
+  name: string;
+  symbol: string;
+  devBuySol: string;
+  website: string;
+  x: string;
+  telegram: string;
+  image: string;
+  firstStrategy: Strategy;
+}
+
+export interface LaunchView {
+  phase: LaunchPhase;
+  isComplete: boolean;
+  canFund: boolean;
+  showAddress: boolean;
+  showTokenLink: boolean;
+  waiting: boolean;
+  title: string;
+  message: string;
+  progress: number;
+  requiredSol: string;
+  receivedSol: string;
+}
+
+const walletAddress = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const uidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * On failed or preparing launches, do not expose a stale address or invite
+ * deposits. A funding wallet is only actionable in the funding phase.
+ */
+export function launchView(status: PublicLaunchStatus): LaunchView {
+  const phase = status.status;
+  const required = safeLamports(status.requiredLamports);
+  const received = safeLamports(status.receivedLamports);
+  const hasAddress = walletAddress.test(status.fundingWallet);
+  const canFund = phase === "funding" && hasAddress && required > 0;
+  const funded = required > 0 && received >= required;
+  const progress =
+    required > 0 ? Math.min(100, (received / required) * 100) : 0;
+  const message =
+    phase === "failed"
+      ? status.error || "Launch needs operator attention. Do not send funds."
+      : phase === "preparing"
+        ? "Preparing a unique funding address. Do not send funds yet."
+        : phase === "funding"
+          ? hasAddress
+            ? `Waiting for a confirmed deposit. ${formatLamports(received)} SOL received.`
+            : "Funding address unavailable. Do not send funds."
+          : phase === "deploying"
+            ? "Deposit confirmed. Deployment is in progress."
+            : phase === "live"
+              ? "Token deployed. Open the token page to see its treasury."
+              : "Launch status is unavailable.";
+  return {
+    phase,
+    isComplete: phase === "live" || phase === "failed",
+    canFund,
+    showAddress: canFund,
+    showTokenLink: phase === "live" && Boolean(status.mint),
+    waiting:
+      phase === "preparing" || phase === "funding" || phase === "deploying",
+    title: phase === "live" ? "LIVE" : phase.toUpperCase(),
+    message,
+    progress: funded ? 100 : progress,
+    requiredSol: formatLamports(required),
+    receivedSol: formatLamports(received),
+  };
+}
+
+export function safeLamports(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return 0;
+  }
+  return value;
+}
+
+export function formatLamports(lamports: number): string {
+  const value = safeLamports(lamports);
+  const whole = Math.floor(value / 1e9);
+  const fraction = String(value % 1e9)
+    .padStart(9, "0")
+    .replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : String(whole);
+}
+
+export function parseSol(value: string): bigint | null {
+  if (!/^\d+(?:\.\d{1,9})?$/.test(value)) return null;
+  const [whole, fraction = ""] = value.split(".");
+  const amount =
+    BigInt(whole!) * 1_000_000_000n + BigInt(fraction.padEnd(9, "0"));
+  if (amount > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return amount;
+}
+
+export function launchTotal(devBuySol: string, baseFeeLamports: number) {
+  const amount = parseSol(devBuySol);
+  if (
+    amount === null ||
+    !Number.isSafeInteger(baseFeeLamports) ||
+    baseFeeLamports < 0
+  ) {
+    return null;
+  }
+  const total = amount + BigInt(baseFeeLamports);
+  if (total > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return formatLamports(Number(total));
+}
+
+export function validateImage(file: File | null): string | null {
+  if (!file) return "Choose a token image.";
+  if (
+    !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type)
+  ) {
+    return "Use a PNG, JPEG, GIF or WebP token image.";
+  }
+  if (file.size <= 0) return "The image file is empty.";
+  if (file.size > 550_000) return "Token images must be smaller than 550 KB.";
+  return null;
+}
+
+/** Validation shared by the launch UI and form-level regression tests. */
+export function validateLaunchFields(fields: LaunchFormFields): string | null {
+  if (!fields.name.trim() || fields.name.trim().length > 32) {
+    return "Enter a token name up to 32 characters.";
+  }
+  if (!/^[A-Za-z0-9]{1,10}$/.test(fields.symbol.trim())) {
+    return "Use 1–10 letters or digits for the ticker.";
+  }
+  if (parseSol(fields.devBuySol) === null) {
+    return "Enter a valid dev buy in SOL, with up to nine decimals.";
+  }
+  if (fields.website && !/^https:\/\/[^\s]+$/i.test(fields.website)) {
+    return "Website must begin with https://.";
+  }
+  if (fields.x && !/^@?[A-Za-z0-9_]{1,15}$/.test(fields.x)) {
+    return "Enter a valid X handle.";
+  }
+  if (
+    fields.telegram &&
+    !/^(?:https:\/\/t\.me\/|t\.me\/|@)?[A-Za-z0-9_]{5,32}$/.test(
+      fields.telegram,
+    )
+  ) {
+    return "Enter a valid Telegram handle.";
+  }
+  if (!fields.firstStrategy) return "Choose a starting strategy.";
+  return null;
+}
+
+export function buildLaunchPayload(fields: LaunchFormFields) {
+  return {
+    name: fields.name.trim(),
+    symbol: fields.symbol.trim().toUpperCase(),
+    description: DESCRIPTION,
+    image: fields.image,
+    website: fields.website.trim(),
+    x: fields.x.trim(),
+    telegram: fields.telegram.trim(),
+    devBuySol: fields.devBuySol,
+    firstStrategy: fields.firstStrategy,
+  };
+}
+
+/** The public launch URL identifies a read-only operation, not a capability. */
+export function launchUrl(uid: string): string | null {
+  return uidPattern.test(uid) ? `/launch?uid=${encodeURIComponent(uid)}` : null;
+}
+
+export function publicTokenUrl(uid: string): string | null {
+  return uidPattern.test(uid) ? `/token/${encodeURIComponent(uid)}` : null;
+}
+
+/** Guard against malformed responses from reverse proxies or failed migrations. */
+export function validLaunchStatus(value: unknown): value is PublicLaunchStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const data = value as Record<string, unknown>;
+  const phases: LaunchPhase[] = [
+    "preparing",
+    "funding",
+    "deploying",
+    "live",
+    "failed",
+  ];
+  return (
+    typeof data.uid === "string" &&
+    uidPattern.test(data.uid) &&
+    phases.includes(data.status as LaunchPhase) &&
+    typeof data.name === "string" &&
+    typeof data.symbol === "string" &&
+    typeof data.fundingWallet === "string" &&
+    typeof data.mint === "string" &&
+    typeof data.launchSignature === "string" &&
+    typeof data.error === "string" &&
+    typeof data.requiredLamports === "number" &&
+    typeof data.receivedLamports === "number"
+  );
+}
+
+export function phaseClass(phase: LaunchPhase): string {
+  return phase === "live"
+    ? "pill pill--active"
+    : phase === "failed"
+      ? "pill pill--error"
+      : "pill pill--wait";
+}

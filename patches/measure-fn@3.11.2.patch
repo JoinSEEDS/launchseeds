@@ -1,0 +1,49 @@
+diff --git a/index.ts b/index.ts
+index 4029672fd306d89927e434d4650a73450bb51627..c8f33a168dc3eb2f75030b28a45b22ec32d69e93 100644
+--- a/index.ts
++++ b/index.ts
+@@ -176,7 +176,7 @@ const isActionObject = (value: unknown): value is Exclude<MeasureAction, string>
+   return typeof value === 'object' && value !== null;
+ };
+ 
+-const buildActionLabel = (actionInternal: MeasureAction): string => {
++const buildActionLabel = <T>(actionInternal: MeasureAction<T>): string => {
+   if (isActionObject(actionInternal) && 'label' in actionInternal) {
+     return String(actionInternal.label);
+   }
+@@ -184,7 +184,7 @@ const buildActionLabel = (actionInternal: MeasureAction): string => {
+   return String(actionInternal);
+ };
+ 
+-const extractBudget = (actionInternal: MeasureAction): number | undefined => {
++const extractBudget = <T>(actionInternal: MeasureAction<T>): number | undefined => {
+   if (!isActionObject(actionInternal)) return undefined;
+   if (!('budget' in actionInternal)) return undefined;
+   if (actionInternal.budget === undefined) return undefined;
+@@ -192,7 +192,7 @@ const extractBudget = (actionInternal: MeasureAction): number | undefined => {
+   return Number(actionInternal.budget);
+ };
+ 
+-const extractTimeout = (actionInternal: MeasureAction): number | undefined => {
++const extractTimeout = <T>(actionInternal: MeasureAction<T>): number | undefined => {
+   if (!isActionObject(actionInternal)) return undefined;
+   if (!('timeout' in actionInternal)) return undefined;
+   if (actionInternal.timeout === undefined) return undefined;
+@@ -200,7 +200,7 @@ const extractTimeout = (actionInternal: MeasureAction): number | undefined => {
+   return Number(actionInternal.timeout);
+ };
+ 
+-const extractMaxResultLength = (actionInternal: MeasureAction): number | undefined => {
++const extractMaxResultLength = <T>(actionInternal: MeasureAction<T>): number | undefined => {
+   if (!isActionObject(actionInternal)) return undefined;
+   if (!('maxResultLength' in actionInternal)) return undefined;
+   if (actionInternal.maxResultLength === undefined) return undefined;
+@@ -217,7 +217,7 @@ const extractResultMapper = <T>(
+   return actionInternal.result;
+ };
+ 
+-const extractMeta = (actionInternal: MeasureAction): Record<string, unknown> | undefined => {
++const extractMeta = <T>(actionInternal: MeasureAction<T>): Record<string, unknown> | undefined => {
+   if (!isActionObject(actionInternal)) return undefined;
+ 
+   const details: Record<string, unknown> = { ...actionInternal };

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+lib/generated/funding-client.js
+
+# Build output
+dist/
+
+# Runtime
+.DS_Store
+*.log
+bun.lockb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+.docs/
+data/
+.env
+.env.*
+!.env.example
+
+package-lock.json
+
+# Private bgrun runtime secrets
+.config.toml
