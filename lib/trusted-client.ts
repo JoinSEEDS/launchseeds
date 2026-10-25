@@ -1,50 +1,40 @@
 /**
- * Rate-limit identity supplied by a trusted ingress. Raw X-Forwarded-For,
- * CF-Connecting-IP and browser-supplied wallet strings are not identities.
- * The ingress must REMOVE incoming x-launchseeds-edge-* headers, generate a
- * privacy-preserving stable key, and sign it with a server-only HMAC secret.
+ * Rate-limit identity attached in-process by the server entrypoint
+ * (scripts/serve-local.ts → localIngress). Headers such as X-Forwarded-For
+ * are never read here; only the entrypoint, which knows the socket peer,
+ * decides who a request is from.
  *
- * Limits here are defense-in-depth. Multi-replica ingress MUST use a shared
- * counter before forwarding; these maps are only local emergency fuses.
+ * Limits here are per web process. Multi-replica deployments would need a
+ * shared counter.
  */
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { ApiError, FixedWindowLimiter } from "./api-security";
 
-const ID_RE = /^[a-zA-Z0-9:_-]{8,128}$/;
-const SIGNATURE_RE = /^[a-f0-9]{64}$/;
-const HEADER_ID = "x-launchseeds-edge-client";
-const HEADER_SIGNATURE = "x-launchseeds-edge-signature";
+const identities = new WeakMap<Request, string>();
+let ingressActive = false;
 
-export function signClientIdentity(identity: string, secret: string): string {
-  if (!ID_RE.test(identity) || secret.length < 32)
-    throw new Error("Invalid trusted ingress identity or secret.");
-  return createHmac("sha256", secret)
-    .update(`launchseeds-edge-v1:${identity}`)
-    .digest("hex");
+export function bindClientIdentity(request: Request, identity: string): Request {
+  identities.set(request, identity);
+  ingressActive = true;
+  return request;
 }
 
-/** In production, unsigned/missing ingress identity fails closed. */
+/** True once requests are flowing through the identity-binding entrypoint. */
+export function trustedIngressActive(): boolean {
+  return ingressActive;
+}
+
+/** In production, a request without an entrypoint identity fails closed. */
 export function trustedClientKey(
   request: Request,
-  options: { secret?: string; production?: boolean } = {},
+  options: { production?: boolean } = {},
 ): string {
-  const secret = options.secret ?? process.env.LAUNCHSEEDS_EDGE_CLIENT_SECRET ?? "";
+  const identity = identities.get(request);
+  if (identity) return identity;
   const production =
     options.production ?? process.env.LAUNCHSEEDS_LIVE_OPERATIONS === "true";
-  if (!secret || secret.length < 32) {
-    if (production)
-      throw new ApiError("Trusted ingress rate limiting is unavailable.", 503);
-    return "local-development";
-  }
-  const id = request.headers.get(HEADER_ID) ?? "";
-  const signature = request.headers.get(HEADER_SIGNATURE) ?? "";
-  if (!ID_RE.test(id) || !SIGNATURE_RE.test(signature))
-    throw new ApiError("Trusted client identity is missing.", 403);
-  const expected = Buffer.from(signClientIdentity(id, secret), "hex");
-  const actual = Buffer.from(signature, "hex");
-  if (!timingSafeEqual(expected, actual))
-    throw new ApiError("Invalid trusted client identity.", 403);
-  return id;
+  if (production)
+    throw new ApiError("Trusted ingress rate limiting is unavailable.", 503);
+  return "local-development";
 }
 
 export interface LimitResult {

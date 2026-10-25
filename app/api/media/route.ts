@@ -1,12 +1,13 @@
+import { MAX_TOKEN_IMAGE_BYTES, TOKEN_IMAGE_SIZE_ERROR } from "../../../lib/media-policy";
 import { requireSameOrigin, ApiError } from "../../../lib/api-security";
 import { IngressRateLimiter } from "../../../lib/trusted-client";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
-const max = 550_000;
+const max = MAX_TOKEN_IMAGE_BYTES;
 // Abuse protections at a trusted proxy are still required in production.
 // Do not rate-limit based on user-controlled X-Forwarded-For values.
-const uploads = new IngressRateLimiter("media", 60, 600_000);
+const uploads = new IngressRateLimiter("media", 10, 600_000);
 const mimeTypes = [
   "image/png",
   "image/jpeg",
@@ -68,7 +69,7 @@ export async function POST(req: Request) {
       { status: 415 },
     );
   if (Number(req.headers.get("content-length") || 0) > max)
-    return Response.json({ error: "Image too large" }, { status: 413 });
+    return Response.json({ error: TOKEN_IMAGE_SIZE_ERROR }, { status: 413 });
   const reader = req.body?.getReader();
   if (!reader) return Response.json({ error: "Empty image" }, { status: 400 });
   const parts: Uint8Array[] = [];
@@ -81,7 +82,7 @@ export async function POST(req: Request) {
       if (length > max) {
         await reader.cancel();
         return Response.json(
-          { error: "Image too large (550 KB max)" },
+          { error: TOKEN_IMAGE_SIZE_ERROR },
           { status: 413 },
         );
       }
@@ -102,12 +103,6 @@ export async function POST(req: Request) {
           : mime === "image/gif"
             ? "gif"
             : "webp";
-  const publicBase = process.env.PUBLIC_BASE_URL;
-  if (!publicBase?.startsWith("https://"))
-    return Response.json(
-      { error: "Public HTTPS URL is not configured" },
-      { status: 503 },
-    );
   const folder = resolve(process.env.LAUNCHSEEDS_ASSETS_PATH || "./data/assets");
   await mkdir(folder, { recursive: true });
   const maxAssets = Math.max(
@@ -126,7 +121,7 @@ export async function POST(req: Request) {
     if (e.code !== "EEXIST") throw e;
   });
   return Response.json(
-    { image: `${publicBase.replace(/\/$/, "")}/api/media/${hash}.${ext}` },
+    { image: `/api/media/${hash}.${ext}` },
     { headers: { "cache-control": "no-store" } },
   );
 }

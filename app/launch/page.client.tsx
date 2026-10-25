@@ -1,31 +1,38 @@
 import { render } from "tradjs/client";
+import {
+  parseLaunchSettings,
+  feeSplit,
+  durationText,
+  sniperDescription,
+  secondsText,
+  compactUsd,
+  rangeText,
+  liquidityShare,
+  SNIPER_SECONDS,
+  MARKET_CAP_STOPS,
+  MAX_LIQUIDITY_SHARE,
+  type LaunchSettings,
+} from "../../src/domain/launch-settings";
 import { createStrategyBuilder } from "../components/strategy-builder";
 import { strategySummary } from "../../lib/strategy-presenter";
 import { launchAvailability } from "../../lib/launch-presentation";
-import { walletProvider } from "../../lib/vote-ui";
-import {
-  publishWallet,
-  subscribeWallet,
-  trackWalletProvider,
-} from "../../lib/wallet-session";
-import {
-  validateFundingTransaction,
-  type UnsignedPayment,
-} from "../../lib/funding-transaction";
 import type { Catalog } from "../../lib/catalog";
 import type { Strategy } from "../../lib/strategy";
 import {
   getJson,
   postJson,
+  patchJson,
   uploadImage,
   copyText,
   SequentialPoller,
 } from "../../lib/client-request";
+import { connectWallet, walletAddress } from "../../lib/wallet-session";
+import { sendWalletTransaction } from "../../lib/wallet-transaction";
+import { solveProof } from "../../lib/proof-of-work";
 import {
   buildLaunchPayload,
   launchUrl,
   launchView,
-  phaseClass,
   publicTokenUrl,
   validateImage,
   validateLaunchFields,
@@ -38,6 +45,8 @@ type Config = {
   launchEnabled: boolean;
   baseFeeLamports: number | null;
   message: string;
+  freeLaunch?: { available: boolean; bits: number | null };
+  imageGeneration?: boolean;
 };
 
 function find<T extends HTMLElement>(id: string): T {
@@ -49,6 +58,19 @@ function find<T extends HTMLElement>(id: string): T {
 function freshCapability(): string {
   const buffer = crypto.getRandomValues(new Uint8Array(32));
   return [...buffer].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+const short = (value: string) =>
+  value.length > 12 ? `${value.slice(0, 4)}…${value.slice(-4)}` : value;
+
+/** Solana Pay URI: wallet apps that scan it prefill the address and amount. */
+export function solanaPayUri(address: string, sol: string, symbol: string): string {
+  const params = new URLSearchParams({
+    amount: sol,
+    label: "LaunchSeeds",
+    message: `Launch $${symbol}`,
+  });
+  return `solana:${address}?${params.toString()}`;
 }
 
 export default function mount() {
@@ -65,6 +87,12 @@ export default function mount() {
   const website = find<HTMLInputElement>("f-web");
   const x = find<HTMLInputElement>("f-x");
   const telegram = find<HTMLInputElement>("f-tg");
+  const powInput = form.querySelector<HTMLInputElement>("[data-pow]")!;
+  const shareInput = form.querySelector<HTMLInputElement>("[data-share]")!;
+  const lowInput = form.querySelector<HTMLInputElement>("[data-range-lo]")!;
+  const highInput = form.querySelector<HTMLInputElement>("[data-range-hi]")!;
+  const editDetails = find<HTMLButtonElement>("edit-launch-details");
+  const payButton = find<HTMLButtonElement>("pay-in-wallet");
   const errorBox = find<HTMLElement>("launch-error");
   const readiness = find<HTMLElement>("launch-ready-hint");
   const submit = find<HTMLButtonElement>("get-deposit");
@@ -74,27 +102,122 @@ export default function mount() {
   const statusPanel = find<HTMLElement>("launch-status-panel");
   const statusText = find<HTMLElement>("payment-status");
   const retryButton = find<HTMLButtonElement>("retry-launch-status");
-  const payButton = find<HTMLButtonElement>("pay-with-wallet");
   const avatar = find<HTMLElement>("launch-avatar");
   const imageUpload = find<HTMLElement>("image-upload");
+  const feedback = find<HTMLElement>("funding-copy-feedback");
+  const freeButton = find<HTMLButtonElement>("free-launch");
+  const freeStatus = find<HTMLElement>("free-launch-status");
+  const generateButton = find<HTMLButtonElement>("generate-image");
 
+  // Strategy rules are not chosen on the launch form; every launch uses the
+  // defaults (24h first-strategy lock, 1h minimum active). Summary shows them.
+  const rules = { firstStrategyLockMs: 86_400_000, minimumActiveMs: 3_600_000 };
   let catalog: Catalog | null = null;
   let current: Strategy | null = null;
   let builder: ReturnType<typeof createStrategyBuilder> | null = null;
   let config: Config | null = null;
   let checking = true;
-  let walletAddress = "";
-  let sendingPayment = false;
-  let paymentSubmitted = false;
   let prepared: PublicLaunchStatus | null = null;
-  let launchUid = "";
+  let launchHandle = "";
   let pendingPayload = "";
   let capability = "";
   let busy = false;
   let destroyed = false;
   let pictureUrl: string | null = null;
   let poller: SequentialPoller | null = null;
+  let countdown: ReturnType<typeof setInterval> | null = null;
   let latestRequest = 0;
+  let editingPrepared = false;
+
+  const symbolNow = () =>
+    (ticker.value.trim() || "TOKEN").replace(/^\$/, "").toUpperCase();
+  const isOn = (panel: string) =>
+    form
+      .querySelector(`[data-toggle-panel="${panel}"] [data-switch]`)
+      ?.getAttribute("aria-checked") === "true";
+  /** Reward fund only counts when its panel is switched on. */
+  const rewardFund = () => (isOn("fund") ? dev.value.trim() || "0" : "0");
+
+  function readSettings(): LaunchSettings {
+    return parseLaunchSettings({
+      firstStrategyLockMs: rules.firstStrategyLockMs,
+      minimumActiveMs: rules.minimumActiveMs,
+      sniperSeconds: isOn("pow") ? SNIPER_SECONDS[Number(powInput.value)] : null,
+      liquidity: isOn("liq")
+        ? {
+            feeShare: Number(shareInput.value),
+            minMcapUsd: MARKET_CAP_STOPS[Number(lowInput.value)],
+            maxMcapUsd: MARKET_CAP_STOPS[Number(highInput.value)],
+          }
+        : null,
+    });
+  }
+
+  const fill = (input: HTMLInputElement, lo: number, hi: number) => {
+    const slider = input.closest<HTMLElement>(".slider");
+    slider?.style.setProperty("--lo", `${lo}%`);
+    slider?.style.setProperty("--hi", `${hi}%`);
+  };
+  /** Slider readouts; the two range handles never cross. */
+  function readSliders() {
+    const lastPow = SNIPER_SECONDS.length - 1;
+    const pow = Number(powInput.value);
+    fill(powInput, 0, (pow / lastPow) * 100);
+    const seconds = secondsText(SNIPER_SECONDS[pow]!);
+    form.querySelector("[data-pow-out]")!.textContent = seconds;
+    powInput.setAttribute("aria-valuetext", seconds);
+    const share = Number(shareInput.value);
+    fill(shareInput, 0, ((share - 1) / (MAX_LIQUIDITY_SHARE - 1)) * 100);
+    form.querySelector("[data-share-out]")!.textContent = String(share);
+    shareInput.setAttribute("aria-valuetext", `${share}%`);
+    const lastStop = MARKET_CAP_STOPS.length - 1;
+    let lo = Number(lowInput.value), hi = Number(highInput.value);
+    if (lo >= hi) {
+      if (document.activeElement === lowInput) lowInput.value = String((lo = hi - 1));
+      else highInput.value = String((hi = lo + 1));
+    }
+    fill(lowInput, (lo / lastStop) * 100, (hi / lastStop) * 100);
+    const low = compactUsd(MARKET_CAP_STOPS[lo]!), high = compactUsd(MARKET_CAP_STOPS[hi]!);
+    form.querySelector("[data-range-out]")!.textContent = `${low}–${high}`;
+    lowInput.setAttribute("aria-valuetext", low);
+    highInput.setAttribute("aria-valuetext", high);
+  }
+
+  function showSettingsSummary() {
+    const settings = readSettings();
+    const rows: [string, string][] = [
+      ["Strategy lock", durationText(settings.firstStrategyLockMs)],
+      ["Minimum active", durationText(settings.minimumActiveMs)],
+      ["Sniper protection", sniperDescription(settings)],
+      ["Liquidity", settings.liquidity ? `${settings.liquidity.feeShare}% · ${rangeText(settings)}` : "Off"],
+    ];
+    render(
+      <>{rows.map(([term, value]) => <><dt>{term}</dt><dd>{value}</dd></>)}</>,
+      find<HTMLElement>("summary-rules"),
+    );
+    const split = feeSplit(liquidityShare(settings));
+    const parts: [string, number, string][] = [
+      ["Rewards", split.rewardsPercent, "var(--accent)"],
+      ["Liquidity", split.liquidityPercent, "var(--s-burn)"],
+      ["$TOKEN", split.tokenPercent, "var(--muted)"],
+    ];
+    const shown = parts.filter(([, pct]) => pct > 0);
+    const bar = find<HTMLElement>("launch-fee-split");
+    bar.setAttribute(
+      "aria-label",
+      `${split.tokenPercent}% to $TOKEN, ${split.liquidityPercent}% to liquidity, ${split.rewardsPercent}% to holder rewards`,
+    );
+    render(
+      <>{shown.map(([, pct, color]) => <i style={{ width: `${pct}%`, background: color }} />)}</>,
+      bar,
+    );
+    render(
+      <>{shown.map(([label, pct, color]) => (
+        <span><i style={{ background: color }} />{`${label} `}<b>{`${pct}%`}</b></span>
+      ))}</>,
+      find<HTMLElement>("launch-fee-legend"),
+    );
+  }
 
   const showError = (message: string) => {
     errorBox.textContent = message;
@@ -104,9 +227,11 @@ export default function mount() {
     errorBox.textContent = "";
     errorBox.hidden = true;
   };
-  const stopPolling = () => {
+  const stopTimers = () => {
     poller?.stop();
     poller = null;
+    if (countdown) clearInterval(countdown);
+    countdown = null;
   };
   const setBusy = (value: boolean) => {
     busy = value;
@@ -115,13 +240,13 @@ export default function mount() {
   };
 
   function updateAvailability() {
-    const view = launchAvailability(config, dev.value, {
+    const view = launchAvailability(config, rewardFund(), {
       checking,
       busy,
-      connected: Boolean(walletAddress),
+      connected: false,
     });
     submit.disabled = view.disabled;
-    submit.textContent = view.buttonLabel;
+    submit.textContent = editingPrepared ? "Confirm changes" : view.buttonLabel;
     actionWrap.hidden = !view.showAction;
     readiness.hidden = !view.showUnavailable;
     readiness.textContent = view.message;
@@ -129,19 +254,12 @@ export default function mount() {
     find<HTMLElement>("summary-total").textContent = view.total;
   }
 
-  // Provider account changes and external disconnects also update the
-  // launch CTA; it should never show Launch for a disconnected wallet.
-  const stopWalletEvents = subscribeWallet((next) => {
-    walletAddress = next;
-    if (!destroyed) updateAvailability();
-  });
-
   /** Keep the same direct render pattern; only the summary is client-owned. */
   const sync = () => {
+    const symbol = symbolNow();
     find<HTMLElement>("summary-name").textContent =
       name.value.trim() || "Untitled";
-    find<HTMLElement>("summary-ticker").textContent =
-      "$" + (ticker.value.trim() || "TOKEN").replace(/^\$/, "").toUpperCase();
+    find<HTMLElement>("summary-ticker").textContent = `$${symbol}`;
     if (!avatar.querySelector("img")) {
       avatar.textContent = (name.value.trim() || "T")
         .split(/\s+/)
@@ -150,12 +268,14 @@ export default function mount() {
         .join("")
         .toUpperCase();
     }
-    find<HTMLElement>("summary-dev").textContent = dev.value || "0";
+    find<HTMLElement>("summary-dev").textContent = rewardFund();
+    find<HTMLElement>("reward-fund-ticker").textContent = `$${symbol}`;
     updateAvailability();
+    try { readSliders(); showSettingsSummary(); } catch { /* Invalid setting is reported on submit. */ }
     form.querySelectorAll<HTMLButtonElement>("[data-dev]").forEach((button) => {
       button.setAttribute(
         "aria-pressed",
-        String(button.dataset.dev === dev.value),
+        String(Number(button.dataset.dev) === Number(dev.value)),
       );
     });
     const description = current ? strategySummary(current, catalog) : null;
@@ -199,109 +319,285 @@ export default function mount() {
     }
     showImage(file!);
   });
-  form.addEventListener("input", (event) => {
-    if (!(event.target as HTMLElement).closest("#first-strategy-root")) sync();
+  generateButton.addEventListener("click", async () => {
+    if (generateButton.disabled) return;
+    if (!name.value.trim()) {
+      showError("Enter a token name first, then generate an image.");
+      name.focus();
+      return;
+    }
+    generateButton.disabled = true;
+    generateButton.classList.add("is-busy");
+    generateButton.textContent = "Generating…";
+    imageUpload.classList.add("is-generating");
+    clearError();
+    try {
+      const response = await fetch("/api/image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: name.value, symbol: ticker.value }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(typeof data?.error === "string" ? data.error : "Image generation failed.");
+      }
+      const blob = await response.blob();
+      const file = new File([blob], `${ticker.value.trim() || "token"}.png`, { type: "image/png" });
+      // Same path as a picked file: validation, preview and upload at submit.
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      image.files = transfer.files;
+      image.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch (error) {
+      showError(error instanceof Error ? error.message : "Image generation failed.");
+    } finally {
+      generateButton.disabled = false;
+      generateButton.classList.remove("is-busy");
+      generateButton.textContent = "Generate";
+      imageUpload.classList.remove("is-generating");
+    }
   });
+
+  const onDetailChanged = (event: Event) => {
+    if (!(event.target as HTMLElement).closest("#first-strategy-root")) sync();
+  };
+  form.addEventListener("input", onDetailChanged);
+  form.addEventListener("change", onDetailChanged);
   form.querySelectorAll<HTMLButtonElement>("[data-dev]").forEach((button) => {
     button.addEventListener("click", () => {
       dev.value = button.dataset.dev || "0";
       sync();
     });
   });
+  // On/off panels.
+  form.querySelectorAll<HTMLElement>("[data-toggle-panel]").forEach((panel) => {
+    const toggle = panel.querySelector<HTMLButtonElement>("[data-switch]")!;
+    const apply = () =>
+      panel.classList.toggle("is-off", toggle.getAttribute("aria-checked") !== "true");
+    toggle.addEventListener("click", () => {
+      toggle.setAttribute("aria-checked", String(toggle.getAttribute("aria-checked") !== "true"));
+      apply();
+      sync();
+    });
+    apply();
+  });
+
+  editDetails.addEventListener("click", () => {
+    if (!prepared || prepared.receivedLamports > 0 || prepared.status !== "funding") return;
+    editingPrepared = true;
+    stopTimers();
+    statusPanel.hidden = true;
+    form.hidden = false;
+    find<HTMLElement>("submit-wrap").hidden = false;
+    actionWrap.hidden = false;
+    submit.textContent = "Confirm changes";
+    find<HTMLElement>("step-details").className = "is-current";
+    find<HTMLElement>("step-deposit").className = "";
+    clearError();
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  payButton.addEventListener("click", async () => {
+    if (!prepared || !launchHandle || !capability) return;
+    feedback.textContent = "";
+    payButton.disabled = true;
+    try {
+      const wallet = walletAddress() || (await connectWallet());
+      payButton.textContent = "Check your wallet…";
+      const built = await postJson<{ transaction: string }>(
+        "/api/launch-payment",
+        { handle: launchHandle, wallet },
+        { headers: { authorization: `Bearer ${capability}` }, timeoutMs: 20_000 },
+      );
+      await sendWalletTransaction(built.transaction);
+      feedback.textContent = "Payment sent. Waiting for the network to confirm it.";
+      void requestStatus().catch(() => {});
+    } catch {
+      feedback.textContent =
+        "Payment wasn't sent. Try again, or send from any wallet using the address.";
+    } finally {
+      payButton.disabled = false;
+      payButton.textContent = "Pay in Wallet";
+    }
+  });
+
+  let freeConfig: Promise<Config | null> | null = null;
+  const loadFreeConfig = () =>
+    (freeConfig ??= config
+      ? Promise.resolve(config)
+      : getJson<Config>("/api/launch-config").catch(() => null));
+  let freeRunning = false;
+  /** Free Launch shows for an unpaid launch without a dev buy while the treasury has funds. */
+  function paintFreeLaunch(status: PublicLaunchStatus) {
+    const eligible =
+      Boolean(capability) &&
+      launchView(status).canFund &&
+      status.receivedLamports === 0 &&
+      (status.devBuyLamports ?? 0) === 0;
+    if (!eligible && !freeRunning) {
+      freeButton.hidden = true;
+      return;
+    }
+    void loadFreeConfig().then((loaded) => {
+      if (!freeRunning) freeButton.hidden = !eligible || !loaded?.freeLaunch?.available;
+    });
+  }
+
+  freeButton.addEventListener("click", async () => {
+    if (!prepared || !launchHandle || !capability || freeRunning) return;
+    freeRunning = true;
+    freeButton.classList.add("is-busy");
+    freeStatus.hidden = false;
+    freeStatus.classList.remove("is-error");
+    const auth = { headers: { authorization: `Bearer ${capability}` }, timeoutMs: 20_000 };
+    try {
+      const puzzle = await postJson<{ challenge: string; bits: number; expiresAt: number }>(
+        "/api/free-launch",
+        { action: "challenge", handle: launchHandle },
+        auth,
+      );
+      const expected = 2 ** puzzle.bits;
+      freeButton.textContent = "Solving puzzle…";
+      const nonce = await solveProof(puzzle.challenge, puzzle.bits, (tried) => {
+        freeStatus.textContent = `Solving the free-launch puzzle… ${Math.min(99, Math.round((100 * tried) / expected))}%`;
+      });
+      freeStatus.textContent = "Solved. Sending your launch fee from the free-launch treasury…";
+      await postJson<{ signature: string }>(
+        "/api/free-launch",
+        { action: "claim", handle: launchHandle, challenge: puzzle.challenge, nonce },
+        auth,
+      );
+      freeStatus.textContent = "Free launch granted. Waiting for the network to confirm the payment.";
+      freeButton.hidden = true;
+      payButton.hidden = true;
+      void requestStatus().catch(() => {});
+    } catch (error) {
+      freeStatus.textContent = error instanceof Error ? error.message : "Free launch failed. You can still pay.";
+      freeStatus.classList.add("is-error");
+      freeButton.textContent = "Free Launch";
+    } finally {
+      freeRunning = false;
+      freeButton.classList.remove("is-busy");
+    }
+  });
+
+  /** The quote window. Payments after it are still detected and processed,
+   * so the countdown simply disappears instead of claiming the address expired. */
+  function startCountdown(expiresAt: number | undefined) {
+    if (countdown) clearInterval(countdown);
+    countdown = null;
+    const expiry = find<HTMLElement>("payment-expiry");
+    expiry.hidden = !expiresAt || expiresAt <= Date.now();
+    if (expiry.hidden) return;
+    const out = find<HTMLElement>("payment-expires");
+    const tick = () => {
+      const left = Math.max(0, Math.round((expiresAt! - Date.now()) / 1000));
+      out.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+      if (left === 0 && countdown) {
+        clearInterval(countdown);
+        countdown = null;
+        expiry.hidden = true;
+      }
+    };
+    tick();
+    countdown = setInterval(tick, 1000);
+  }
 
   function showStatus(status: PublicLaunchStatus) {
     if (destroyed) return;
     prepared = status;
-    launchUid = status.uid;
+    launchHandle = status.handle;
     // Public launch status also supplies the token identity on a direct
-    // /launch?uid=… visit. Never leave the designer's sample $SLAB label.
+    // /launch?launch=… visit. Never leave the designer's sample $SLAB label.
     const symbol = status.symbol.replace(/^\$/, "").toUpperCase();
     find<HTMLElement>("summary-ticker").textContent = `$${symbol}`;
     find<HTMLElement>("summary-name").textContent = status.name;
-    const launchLabel = document.querySelector<HTMLElement>(
-      "#launched-token-link [data-bind-ticker]",
-    );
-    if (launchLabel) launchLabel.textContent = `$${symbol}`;
-    const link = launchUrl(status.uid);
+    statusPanel.querySelectorAll<HTMLElement>("[data-bind-ticker]").forEach((label) => {
+      label.textContent = `$${symbol}`;
+    });
+    const link = launchUrl(status.handle);
     if (link && location.pathname + location.search !== link) {
       history.replaceState(null, "", link);
     }
     const view = launchView(status);
+    const live = view.phase === "live";
+    const fundAmount = (status.devBuyLamports ?? 0) / 1e9;
+    // Checklist ticks off one by one: payment → token → treasury → rules → fund.
     const steps = Array.from(
       document.querySelectorAll<HTMLElement>("#launch-checklist li"),
     );
-    const completed =
-      view.phase === "live"
-        ? steps.length
-        : view.phase === "deploying"
-          ? 2
-          : view.phase === "funding"
-            ? 1
-            : 0;
-    steps.forEach((step, index) => {
+    const fundStep = find<HTMLElement>("dev-buy-step");
+    fundStep.hidden = fundAmount === 0;
+    const visible = steps.filter((step) => !step.hidden);
+    const completed = live
+      ? visible.length - (fundAmount > 0 && !status.rewardFundVerified ? 1 : 0)
+      : view.phase === "deploying"
+        ? 1
+        : 0;
+    visible.forEach((step, index) => {
       step.classList.toggle("is-done", index < completed);
-      step.classList.toggle(
-        "is-current",
-        index === completed && !view.isComplete,
-      );
-      const detail = step.querySelector<HTMLElement>("span");
-      if (detail)
-        detail.textContent =
-          index === 0 && index < completed
-            ? "Ready"
-            : index === 1 && index < completed
-              ? "Confirmed"
-              : index === 2 && view.phase === "live"
-                ? "Live"
-                : "";
+      step.classList.toggle("is-current", index === completed && view.phase !== "failed");
     });
+    find<HTMLElement>("step-payment").firstChild!.textContent =
+      view.phase === "funding" ? "Waiting for payment" : "Payment received";
+    find<HTMLElement>("reward-fund-amount").textContent =
+      `${fundAmount.toLocaleString("en-US", { maximumFractionDigits: 9 })} SOL`;
+    if (live && fundAmount > 0 && !status.rewardFundVerified)
+      fundStep.title = "Awaiting a confirmed treasury token-balance observation";
+
     statusPanel.hidden = false;
     form.hidden = true;
     find<HTMLElement>("submit-wrap").hidden = true;
     find<HTMLElement>("step-details").className = "is-done";
-    find<HTMLElement>("step-deposit").className =
-      view.phase === "live" ? "is-done" : "is-current";
-    find<HTMLElement>("step-live").className =
-      view.phase === "live" ? "is-current" : "";
-    const pill = find<HTMLElement>("launch-status-pill");
-    pill.textContent = view.title;
-    pill.className = phaseClass(view.phase);
-    statusText.textContent = view.message;
+    find<HTMLElement>("step-deposit").className = live ? "is-done" : "is-current";
+    find<HTMLElement>("step-live").className = live ? "is-done" : "";
+    for (const [id, done, number] of [["step-details", true, "1"], ["step-deposit", live, "2"], ["step-live", live, "3"]] as const) {
+      const marker = find<HTMLElement>(id).querySelector("span");
+      if (marker) marker.textContent = done ? "✓" : number;
+    }
+    editingPrepared = false;
+    editDetails.hidden = view.phase !== "funding" || status.receivedLamports > 0 || !capability;
+    payButton.hidden = !view.canFund || !capability;
+    paintFreeLaunch(status);
+    find<HTMLElement>("pay-title").textContent = live ? "Launched" : view.canFund ? "Pay to launch" : "Launching";
+    // Moving bar and spinner while preparing, waiting for payment or deploying.
+    find<HTMLElement>("launch-busy").hidden = !view.waiting;
+    find<HTMLElement>("launch-scan").hidden = !view.waiting;
+    find<HTMLElement>("launch-busy-text").textContent =
+      view.canFund ? "Waiting for payment" : view.phase === "preparing" ? "Preparing" : "Launching";
+    statusText.textContent = view.canFund
+      ? `${view.receivedSol} SOL received so far.`
+      : view.message;
+    statusText.hidden = live;
+
     find<HTMLElement>("payment-amount").textContent = view.canFund
       ? `${view.requiredSol} SOL`
       : "—";
     find<HTMLElement>("funding-details").hidden = !view.showAddress;
-    payButton.hidden = !view.canFund || !capability || paymentSubmitted;
-    payButton.disabled = sendingPayment;
-
     const address = find<HTMLElement>("payment-address");
     const copy = find<HTMLButtonElement>("copy-address");
+    const amountCopy = find<HTMLButtonElement>("copy-amount");
+    amountCopy.onclick = async () => {
+      const ok = await copyText(view.requiredSol);
+      feedback.textContent = ok ? "Exact SOL amount copied." : "Select the amount to copy.";
+    };
     const qr = find<HTMLImageElement>("payment-qr");
-    address.hidden = !view.showAddress;
-    copy.hidden = !view.showAddress;
-    qr.hidden = !view.showAddress || !qr.src;
     if (view.showAddress) {
       address.textContent = status.fundingWallet;
       copy.onclick = async () => {
         const ok = await copyText(status.fundingWallet);
-        copy.textContent = ok ? "Copied" : "Select the address to copy";
+        feedback.textContent = ok ? "Address copied." : "Select the address to copy.";
       };
-      if (qr.dataset.address !== status.fundingWallet) {
-        qr.dataset.address = status.fundingWallet;
-        qr.src = "";
+      const uri = solanaPayUri(status.fundingWallet, view.requiredSol, symbol);
+      if (qr.dataset.uri !== uri) {
+        qr.dataset.uri = uri;
+        qr.hidden = true;
         void import("qrcode")
           .then(({ default: QRCode }) =>
-            QRCode.toDataURL(status.fundingWallet, {
-              width: 180,
-              margin: 1,
-              errorCorrectionLevel: "M",
-            }),
+            QRCode.toDataURL(uri, { width: 200, margin: 1, errorCorrectionLevel: "M" }),
           )
           .then((source) => {
-            if (
-              prepared?.fundingWallet === status.fundingWallet &&
-              !destroyed
-            ) {
+            if (qr.dataset.uri === uri && !destroyed) {
               qr.src = source;
               qr.hidden = false;
             }
@@ -310,31 +606,46 @@ export default function mount() {
             qr.hidden = true;
           });
       }
+      startCountdown(status.expiresAt);
     } else {
       address.textContent = "";
       qr.removeAttribute("src");
-      qr.dataset.address = "";
+      qr.dataset.uri = "";
+      if (countdown) clearInterval(countdown);
+      countdown = null;
     }
 
     const progress = find<HTMLElement>("deposit-progress");
     progress.setAttribute("aria-valuenow", String(Math.floor(view.progress)));
     const bar = progress.querySelector<HTMLElement>("i");
     if (bar) bar.style.width = `${view.progress}%`;
-    progress.hidden = !view.canFund;
+    progress.hidden = !view.canFund || view.progress === 0;
 
-    const tokenLink = find<HTMLAnchorElement>("launched-token-link");
-    const url = publicTokenUrl(status.uid);
-    tokenLink.hidden = !view.showTokenLink || !url;
-    if (url) tokenLink.href = url;
-    retryButton.hidden = view.isComplete;
-    if (view.isComplete) stopPolling();
+    // "$TICKER is live" card with Share on X and Open.
+    const liveCard = find<HTMLElement>("launch-live");
+    const url = publicTokenUrl(status.mint);
+    liveCard.hidden = !live || !url;
+    if (live && url) {
+      find<HTMLAnchorElement>("launched-token-link").href = url;
+      find<HTMLElement>("live-ca").textContent = short(status.mint);
+      find<HTMLElement>("live-ca-copy").dataset.copy = status.mint;
+      const liveAvatar = find<HTMLElement>("live-avatar");
+      const art = avatar.querySelector("img");
+      if (art) liveAvatar.replaceChildren(art.cloneNode());
+      else liveAvatar.textContent = avatar.textContent;
+      const text = `$${symbol} is live on LaunchSeeds. Holders vote on what its fees pay for.`;
+      find<HTMLAnchorElement>("share-on-x").href =
+        `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(location.origin + url)}`;
+    }
+    retryButton.hidden = view.phase !== "failed";
+    if (view.isComplete) stopTimers();
   }
 
   async function requestStatus(signal?: AbortSignal) {
-    if (!launchUid) return;
+    if (!launchHandle) return;
     const sequence = ++latestRequest;
     const status = await getJson<PublicLaunchStatus>(
-      `/api/launches/${encodeURIComponent(launchUid)}`,
+      `/api/launches/${encodeURIComponent(launchHandle)}`,
       { signal, timeoutMs: 12_000 },
     );
     if (!validLaunchStatus(status))
@@ -343,66 +654,9 @@ export default function mount() {
     showStatus(status);
   }
 
-  /** Send only an operator-verified unsigned transaction, after wallet approval. */
-  async function sendPayment() {
-    if (sendingPayment || paymentSubmitted || !prepared || !capability) return;
-    if (!launchView(prepared).canFund) return;
-    const provider = walletProvider(window);
-    if (!provider || typeof provider.signAndSendTransaction !== "function") {
-      statusText.textContent =
-        "Your wallet does not support in-app payments. Send SOL to the funding address shown above instead.";
-      return;
-    }
-    sendingPayment = true;
-    payButton.disabled = true;
-    payButton.textContent = "Confirm in wallet…";
-    try {
-      const connected = await provider.connect();
-      const wallet = connected.publicKey?.toString() || "";
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet))
-        throw new Error("Connect a Solana wallet to pay.");
-      walletAddress = wallet;
-      trackWalletProvider(provider);
-      publishWallet(wallet);
-      const preparedPayment = await postJson<UnsignedPayment>(
-        "/api/launch-payment",
-        { uid: prepared.uid, wallet },
-        {
-          headers: { authorization: `Bearer ${capability}` },
-          timeoutMs: 20_000,
-        },
-      );
-      // Independently validate the exact SOL transfer and reject any extra
-      // instructions before asking the wallet to authorize payment.
-      const transaction = validateFundingTransaction({
-        payment: preparedPayment,
-        launch: prepared,
-        payer: wallet,
-      });
-      // Exactly one user-authorized SOL transfer funds the launch. The worker
-      // handles deployment separately after verifying the transfer on chain.
-      await provider.signAndSendTransaction(transaction);
-      paymentSubmitted = true;
-      payButton.hidden = true;
-      statusText.textContent =
-        "Payment submitted. Waiting for network confirmation.";
-      startPolling();
-    } catch (error) {
-      statusText.textContent =
-        error instanceof Error ? error.message : "Payment was not sent.";
-    } finally {
-      sendingPayment = false;
-      payButton.disabled = false;
-      payButton.textContent = "Pay in Wallet";
-    }
-  }
-  payButton.addEventListener("click", () => {
-    void sendPayment();
-  });
-
   function startPolling() {
-    stopPolling();
-    poller = new SequentialPoller(requestStatus, 10_000, (error) => {
+    poller?.stop();
+    poller = new SequentialPoller(requestStatus, 5_000, (error) => {
       if (!destroyed)
         statusText.textContent =
           error instanceof Error
@@ -426,7 +680,7 @@ export default function mount() {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (busy || prepared) return;
+    if (busy || (prepared && !editingPrepared)) return;
     clearError();
     if (!config?.launchEnabled) {
       // Offline launch state is already shown in place of the CTA.
@@ -447,15 +701,22 @@ export default function mount() {
       showError(imageProblem);
       return;
     }
+    let settings: LaunchSettings;
+    try { settings = readSettings(); }
+    catch (error) {
+      showError(error instanceof Error ? error.message : "Enter valid launch settings.");
+      return;
+    }
     const formFields = {
       name: name.value,
       symbol: ticker.value,
-      devBuySol: dev.value,
+      devBuySol: rewardFund(),
       website: website.value,
       x: x.value,
       telegram: telegram.value,
       image: "",
       firstStrategy: result.config,
+      settings,
     };
     const validation = validateLaunchFields(formFields);
     if (validation) {
@@ -465,28 +726,37 @@ export default function mount() {
 
     setBusy(true);
     try {
-      const provider = walletProvider(window);
-      if (!provider)
-        throw new Error("Install a Solana wallet to launch your token.");
-      const connected = await provider.connect();
-      const address = connected.publicKey?.toString() || "";
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address))
-        throw new Error("Wallet connection failed.");
-      walletAddress = address;
-      trackWalletProvider(provider);
-      publishWallet(address);
-      updateAvailability();
-      // The launch service prepares a unique deposit; the status page shows
-      // the payment amount and address for wallet confirmation. Never imply
-      // that connecting a wallet alone transferred SOL or deployed the mint.
-      // The artwork is uploaded only after local validation succeeds. The
-      // canonical launch endpoint independently validates the resulting URL.
+      // Prepare a funding address without connecting or signing in a wallet.
       const uploaded = await uploadImage<UploadResult>("/api/media", file!);
       if (!uploaded.image)
         throw new Error("Image hosting did not return a URL.");
       const payload = JSON.stringify(
         buildLaunchPayload({ ...formFields, image: uploaded.image }),
       );
+      if (editingPrepared && prepared) {
+        if (payload === pendingPayload) {
+          showStatus(prepared);
+          startPolling();
+          return;
+        }
+        const amended = await patchJson<PublicLaunchStatus>(
+          `/api/launches/${encodeURIComponent(prepared.handle)}`,
+          JSON.parse(payload),
+          {
+            headers: { authorization: `Bearer ${capability}` },
+            timeoutMs: 90_000,
+          },
+        );
+        if (!validLaunchStatus(amended) ||
+            amended.handle !== prepared.handle ||
+            amended.fundingWallet !== prepared.fundingWallet) {
+          throw new Error("Amendment did not preserve the funding address.");
+        }
+        pendingPayload = payload;
+        showStatus(amended);
+        startPolling();
+        return;
+      }
       if (payload !== pendingPayload) {
         pendingPayload = payload;
         capability = freshCapability();
@@ -504,10 +774,8 @@ export default function mount() {
       if (!validLaunchStatus(response))
         throw new Error("Launch preparation response was incomplete.");
       showStatus(response);
+      window.scrollTo({ top: 0, behavior: "smooth" });
       if (!launchView(response).isComplete) startPolling();
-      // A prepared address may be ready immediately. The wallet still presents
-      // and requires explicit confirmation of its SOL transfer.
-      if (launchView(response).canFund) await sendPayment();
     } catch (error) {
       showError(
         error instanceof Error ? error.message : "Unable to prepare launch.",
@@ -517,12 +785,13 @@ export default function mount() {
     }
   });
 
-  // A prepared launch cannot be edited in place. This intentionally does not
-  // restore form inputs or create a second funding address.
-  find<HTMLButtonElement>("back-to-form").hidden = true;
+  // Prepared launch details remain in the existing form. Never silently
+  // create another funding address when a user navigates back to review.
 
   async function initialise() {
-    const existing = new URLSearchParams(location.search).get("uid");
+    // `uid` is the pre-2026-10-25 parameter name; old creator links keep working.
+    const query = new URLSearchParams(location.search);
+    const existing = query.get("launch") || query.get("uid");
     if (existing) {
       checking = false;
       readiness.hidden = true;
@@ -532,7 +801,7 @@ export default function mount() {
         showError("Invalid launch URL.");
         return;
       }
-      launchUid = existing;
+      launchHandle = existing;
       statusPanel.hidden = false;
       form.hidden = true;
       find<HTMLElement>("submit-wrap").hidden = true;
@@ -573,8 +842,11 @@ export default function mount() {
             baseFeeLamports: null,
             message: "Launch status unavailable.",
           };
+    generateButton.hidden = !config.imageGeneration;
     builder = createStrategyBuilder(builderRoot, {
       catalog,
+      // A launch starts with a pack or a stock; holders can vote for anything later.
+      tabs: ["pack", "stock"],
       onChange: (next) => {
         current = next;
         sync();
@@ -596,10 +868,12 @@ export default function mount() {
   return () => {
     destroyed = true;
     latestRequest++;
-    stopPolling();
-    stopWalletEvents();
+    stopTimers();
     if (pictureUrl) URL.revokeObjectURL(pictureUrl);
     render(null, previewRoot);
     render(null, builderRoot);
+    render(null, find<HTMLElement>("summary-rules"));
+    render(null, find<HTMLElement>("launch-fee-split"));
+    render(null, find<HTMLElement>("launch-fee-legend"));
   };
 }

@@ -51,10 +51,8 @@ export function launchAvailability(
         ? ""
         : "Token launches are not available at this time.",
     buttonLabel: state.busy
-      ? "Starting launch…"
-      : state.connected
-        ? "Launch"
-        : "Connect Wallet & Launch",
+      ? "Preparing payment…"
+      : "Continue to Payment",
     fee: fixedFeeText(fee),
     total,
   };

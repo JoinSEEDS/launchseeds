@@ -29,7 +29,7 @@ export function change(
   ...args: Array<string | number | null>
 ): boolean {
   // RETURNING is supported in SQLite 3.35+ and eliminates reliance on exec() return values.
-  return rows<{ uid: string }>(db, `${sql} RETURNING uid`, ...args).length > 0;
+  return rows<{ id: number }>(db, `${sql} RETURNING id`, ...args).length > 0;
 }
 export function page<T>(items: T[], pageArgs: PageArgs): Page<T> {
   const p = safePage(pageArgs);
@@ -63,13 +63,15 @@ export function validIdentifier(s: string) {
   if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(s)) throw new Error("Invalid identifier");
   return s;
 }
-export function patchByUid<T extends Record<string, unknown>>(
+export function patchById<T extends Record<string, unknown>>(
   db: SqlDb,
   table: string,
-  uid: string,
+  id: number,
   patch: Partial<T>,
   whitelist: readonly string[],
 ): boolean {
+  if (!(table in schemas)) throw new Error("Unknown table");
+  schemas[table as keyof Tables].partial().parse(patch);
   const entries = Object.entries(patch).filter(
     ([k, v]) => v !== undefined && whitelist.includes(k),
   );
@@ -85,20 +87,30 @@ export function patchByUid<T extends Record<string, unknown>>(
   ) as (string | number | null)[];
   return change(
     db,
-    `UPDATE ${validIdentifier(table)} SET ${col} WHERE uid = ?`,
+    `UPDATE ${validIdentifier(table)} SET ${col} WHERE id = ?`,
     ...vals,
-    uid,
+    id,
   );
 }
 export function transition<T extends Record<string, unknown>>(
   db: SqlDb,
   table: string,
-  uid: string,
+  id: number,
   from: string | string[],
   to: string,
   patch: Partial<T>,
   whitelist: readonly string[],
 ): boolean {
+  if (!(table in schemas)) throw new Error("Unknown table");
+  schemas[table as keyof Tables].partial().parse(patch);
+  const statusSchema = (
+    schemas[table as keyof Tables].shape as Record<
+      string,
+      import("sqlite-zod-orm").z.ZodTypeAny
+    >
+  ).status;
+  if (!statusSchema) throw new Error("Table has no status");
+  statusSchema.parse(to);
   const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
   if (entries.some(([key]) => !whitelist.includes(key)))
     throw new Error("Forbidden transition patch field");
@@ -113,10 +125,10 @@ export function transition<T extends Record<string, unknown>>(
   if (statuses.length === 0) return false;
   return change(
     db,
-    `UPDATE ${validIdentifier(table)} SET ${set} WHERE uid = ? AND status IN (${statuses.map(() => "?").join(",")})`,
+    `UPDATE ${validIdentifier(table)} SET ${set} WHERE id = ? AND status IN (${statuses.map(() => "?").join(",")})`,
     to,
     ...values,
-    uid,
+    id,
     ...statuses,
   );
 }
@@ -135,7 +147,9 @@ export function decode<K extends keyof Tables>(
   const bools = (boolFields as Record<string, readonly string[]>)[table] ?? [];
   for (const key of bools)
     if (key in data) data[key] = data[key] === true || data[key] === 1;
-  return schemas[table].parse(data) as Tables[K];
+  const id = Number(data.id);
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Row is missing its id");
+  return { ...schemas[table].parse(data), id } as Tables[K];
 }
 export function record<K extends keyof Tables>(
   db: SqlDb,

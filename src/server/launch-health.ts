@@ -5,16 +5,16 @@
  * RPC probe. This is not a guarantee of future uptime; deposits remain an
  * operational responsibility and are never accepted on configuration alone.
  */
-import { Database } from "bun:sqlite";
-import { dirname, resolve } from "node:path";
-import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { openDatabase, type LaunchseedsDatabase } from "../db/connection";
+import { getStore } from "./runtime";
 import { solToLamports } from "../shared/domain";
 import {
   assessLaunchReadiness,
   type OperationalReadiness,
 } from "../../lib/launch-operational-rules";
 import { RequestCache } from "../../lib/request-cache";
+import { trustedIngressActive } from "../../lib/trusted-client";
 
 export interface WorkerHeartbeat {
   workerId: string;
@@ -26,86 +26,70 @@ export interface WorkerHeartbeat {
   lastError: string;
 }
 
+/** Stored in the main LaunchSeeds database (table `workerHealth`). A path opens a
+ * private database, which tests use with ":memory:". */
+const WORKER = "launch-worker" as const;
 export class WorkerHealthRepository {
-  private readonly db: Database;
-  constructor(path: string) {
-    if (path !== ":memory:")
-      mkdirSync(dirname(resolve(path)), { recursive: true });
-    this.db = new Database(path, { create: true });
-    this.db.exec(`PRAGMA journal_mode=WAL;
-      PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS worker_health (
-        name TEXT PRIMARY KEY CHECK(name='launch-worker'),
-        worker_id TEXT NOT NULL,
-        active INTEGER NOT NULL,
-        healthy INTEGER NOT NULL,
-        heartbeat_at INTEGER NOT NULL,
-        cycle_started_at INTEGER NOT NULL,
-        completed_at INTEGER NOT NULL,
-        last_error TEXT NOT NULL
-      )`);
+  private readonly db: LaunchseedsDatabase;
+  private readonly owned: boolean;
+  constructor(source: string | LaunchseedsDatabase) {
+    this.owned = typeof source === "string";
+    this.db = typeof source === "string" ? openDatabase(source) : source;
   }
   close() {
-    this.db.close();
+    if (this.owned) this.db.close();
+  }
+  private row() {
+    return this.db.workerHealth.select().where({ name: WORKER }).get();
   }
   read(): WorkerHeartbeat | null {
-    const row = this.db
-      .query(`SELECT * FROM worker_health WHERE name='launch-worker'`)
-      .get() as {
-      worker_id: string;
-      active: number;
-      healthy: number;
-      heartbeat_at: number;
-      cycle_started_at: number;
-      completed_at: number;
-      last_error: string;
-    } | null;
+    const row = this.row();
     return (
       row && {
-        workerId: row.worker_id,
-        active: row.active === 1,
-        healthy: row.healthy === 1,
-        heartbeatAt: row.heartbeat_at,
-        cycleStartedAt: row.cycle_started_at,
-        completedAt: row.completed_at,
-        lastError: row.last_error,
+        workerId: row.workerId,
+        active: row.active,
+        healthy: row.healthy,
+        heartbeatAt: row.heartbeatAt,
+        cycleStartedAt: row.cycleStartedAt,
+        completedAt: row.completedAt,
+        lastError: row.lastError,
       }
     );
   }
   /** Starting a new process immediately invalidates the old worker's proof. */
   begin(workerId: string = randomUUID(), now = Date.now()): string {
-    this.db
-      .query(
-        `INSERT INTO worker_health
-      (name,worker_id,active,healthy,heartbeat_at,cycle_started_at,completed_at,last_error)
-      VALUES('launch-worker',?,1,0,?,0,0,'')
-      ON CONFLICT(name) DO UPDATE SET worker_id=excluded.worker_id,
-      active=1,healthy=0,heartbeat_at=excluded.heartbeat_at,
-      cycle_started_at=0,completed_at=0,last_error=''`,
-      )
-      .run(workerId, now);
+    this.db.workerHealth.upsert(
+      { name: WORKER },
+      {
+        name: WORKER,
+        workerId,
+        active: true,
+        healthy: false,
+        heartbeatAt: now,
+        cycleStartedAt: 0,
+        completedAt: 0,
+        lastError: "",
+      },
+    );
     return workerId;
   }
-  startCycle(workerId: string, now = Date.now()): boolean {
+  /** Only the currently registered, active worker may write its heartbeat. */
+  private own(workerId: string, patch: Partial<WorkerHeartbeat>, activeOnly = true) {
     return (
-      this.db
-        .query(
-          `UPDATE worker_health SET cycle_started_at=?,heartbeat_at=?,healthy=0
-      WHERE name='launch-worker' AND worker_id=? AND active=1`,
-        )
-        .run(now, now, workerId).changes === 1
+      this.db.workerHealth
+        .select()
+        .where({ name: WORKER, workerId, ...(activeOnly ? { active: true } : {}) })
+        .updateAll(patch) === 1
     );
+  }
+  startCycle(workerId: string, now = Date.now()): boolean {
+    // A normal cycle does not invalidate the last completed result. Admission
+    // still rejects failed cycles, stale proofs, stalled cycles and restarts.
+    return this.own(workerId, { cycleStartedAt: now, heartbeatAt: now });
   }
   /** Periodically proves the process is still alive between 60s cycles. */
   touch(workerId: string, now = Date.now()): boolean {
-    return (
-      this.db
-        .query(
-          `UPDATE worker_health SET heartbeat_at=?
-      WHERE name='launch-worker' AND worker_id=? AND active=1`,
-        )
-        .run(now, workerId).changes === 1
-    );
+    return this.own(workerId, { heartbeatAt: now });
   }
 
   finishCycle(
@@ -114,35 +98,21 @@ export class WorkerHealthRepository {
     error = "",
     now = Date.now(),
   ): boolean {
-    return (
-      this.db
-        .query(
-          `UPDATE worker_health
-      SET heartbeat_at=?,completed_at=?,healthy=?,last_error=?
-      WHERE name='launch-worker' AND worker_id=? AND active=1`,
-        )
-        .run(now, now, healthy ? 1 : 0, error.slice(0, 200), workerId)
-        .changes === 1
-    );
+    return this.own(workerId, {
+      heartbeatAt: now,
+      completedAt: now,
+      healthy,
+      lastError: error.slice(0, 200),
+    });
   }
   stop(workerId: string, now = Date.now()): boolean {
-    return (
-      this.db
-        .query(
-          `UPDATE worker_health SET active=0,healthy=0,heartbeat_at=?
-      WHERE name='launch-worker' AND worker_id=?`,
-        )
-        .run(now, workerId).changes === 1
-    );
+    return this.own(workerId, { active: false, healthy: false, heartbeatAt: now }, false);
   }
 }
 
 let singleton: WorkerHealthRepository | null = null;
 export function getWorkerHealth() {
-  return (singleton ??= new WorkerHealthRepository(
-    process.env.LAUNCHSEEDS_WORKER_HEALTH_DB_PATH ||
-      "./data/launchseeds-worker-health.sqlite",
-  ));
+  return (singleton ??= new WorkerHealthRepository(getStore().data.database));
 }
 
 export interface RpcProbe {
@@ -232,9 +202,7 @@ export async function getOperationalLaunchReadiness(
     },
     config: {
       rpc: Boolean(rpcUrl),
-      signedIngress:
-        (process.env.LAUNCHSEEDS_EDGE_CLIENT_SECRET?.length ?? 0) >= 32,
-      publicBase: Boolean(process.env.PUBLIC_BASE_URL?.startsWith("https://")),
+      signedIngress: trustedIngressActive(),
       feeLamports: baseFeeLamports,
     },
     worker,

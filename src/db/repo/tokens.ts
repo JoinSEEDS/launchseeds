@@ -1,9 +1,9 @@
-import type { Token, LaunchStatusValue } from "../schema";
+import type { Token, NewRows, LaunchStatusValue } from "../schema";
 import { schemas } from "../schema";
 import {
   record,
   records,
-  patchByUid,
+  patchById,
   transition,
   selectPage,
   type PageArgs,
@@ -22,31 +22,82 @@ const PATCH = [
   "launchedAt",
   "refundWallet",
 ] as const;
+/** Launch-request fields merged into the token row (lease, retries, inputs). */
+const LAUNCH_PATCH = [
+  "leaseId",
+  "leaseUntil",
+  "attempts",
+  "intent",
+  "error",
+  "metadataUri",
+  "mintSignerRef",
+  "inputJson",
+  "requestHash",
+  "launchSettingsJson",
+] as const;
+/** Wallets, quote and metadata recorded when preparation completes. */
+const PREPARED_PATCH = [
+  "fundingWallet",
+  "fundingWalletName",
+  "creatorWallet",
+  "rewardWallet",
+  "mintSignerRef",
+  "metadataUri",
+  "requiredLamports",
+  "devBuyLamports",
+  "quoteExpiresAt",
+  "activeStrategyId",
+  "leaseId",
+  "leaseUntil",
+  "error",
+] as const;
 
 export function tokenRepo(db: SqlDb) {
   return {
-    insert(input: Token) {
-      db.tokens.insert(schemas.tokens.parse(input));
+    setSnapshot(id: number, slot: number) {
+      return patchById(db, "tokens", id, { holdersSnapshotSlot: slot }, [
+        "holdersSnapshotSlot",
+      ]);
     },
-    get(uid: string) {
-      return record(db, "tokens", "uid = ?", uid);
+    all() {
+      return records(db, "tokens", "1=1 ORDER BY createdAt DESC");
+    },
+    /** Returns the new row id. */
+    insert(input: NewRows["tokens"]): number {
+      return db.tokens.insert(schemas.tokens.parse(input)).id;
+    },
+    get(id: number) {
+      return record(db, "tokens", "id = ?", id);
     },
     getByMint(mint: string) {
       return record(db, "tokens", "mint = ?", mint);
     },
+    getByHandle(handle: string) {
+      return record(db, "tokens", "handle = ?", handle);
+    },
+    getByAccess(accessHash: string) {
+      return record(db, "tokens", "accessHash = ?", accessHash);
+    },
     getByFundingWallet(wallet: string) {
       return record(db, "tokens", "fundingWallet = ?", wallet);
+    },
+    /** Launches whose wallets and metadata are not prepared yet. */
+    preparing() {
+      return records(db, "tokens", "status = 'preparing' ORDER BY createdAt");
     },
     listLive(args: PageArgs) {
       const result = selectPage<Record<string, unknown>>(
         db,
-        "SELECT * FROM tokens WHERE status = 'live' ORDER BY launchedAt DESC, uid DESC",
+        "SELECT * FROM tokens WHERE status = 'live' ORDER BY launchedAt DESC, id DESC",
         [],
         args,
       );
       return {
         ...result,
-        items: result.items.map((x) => schemas.tokens.parse(x)),
+        items: result.items.map((x) => ({
+          ...schemas.tokens.parse(x),
+          id: Number(x.id),
+        })),
       };
     },
     search(query: string, limit = 20) {
@@ -73,31 +124,53 @@ export function tokenRepo(db: SqlDb) {
       );
     },
     transition(
-      uid: string,
+      id: number,
       from: LaunchStatusValue | LaunchStatusValue[],
       to: LaunchStatusValue,
       patch: Partial<Token> = {},
     ) {
-      return transition(db, "tokens", uid, from, to, patch, PATCH);
+      return transition(db, "tokens", id, from, to, patch, PATCH);
     },
-    update(uid: string, patch: Partial<Token>) {
-      return patchByUid(db, "tokens", uid, patch, PATCH);
+    update(id: number, patch: Partial<Token>) {
+      return patchById(db, "tokens", id, patch, PATCH);
+    },
+    /** Preparation lease, retry counters and stored launch inputs. */
+    updateLaunch(id: number, patch: Partial<Token>) {
+      return patchById(db, "tokens", id, patch, LAUNCH_PATCH);
+    },
+    /** preparing → funding once wallets, metadata and quote exist. */
+    markPrepared(id: number, patch: Partial<Token>) {
+      return transition(db, "tokens", id, "preparing", "funding", patch, PREPARED_PATCH);
     },
     setGovernance(
-      uid: string,
+      id: number,
       state: Pick<
         Token,
         "activeStrategyId" | "leaderStrategyId" | "leaderSince"
       >,
     ) {
-      return patchByUid(db, "tokens", uid, state, [
+      return patchById(db, "tokens", id, state, [
         "activeStrategyId",
         "leaderStrategyId",
         "leaderSince",
       ]);
     },
-    setMarket(uid: string, data: Pick<Token, "priceUsd" | "marketCapUsd">) {
-      return patchByUid(db, "tokens", uid, data, ["priceUsd", "marketCapUsd"]);
+    /** Update only a still-unfunded launch. Must run within the caller's repo.tx. */
+    updateUnfundedDetails(id: number, patch: Pick<Token,
+      "name" | "symbol" | "description" | "image" | "website" | "x" | "telegram" |
+      "metadataUri" | "requiredLamports" | "devBuyLamports" | "launchSettingsJson" | "quoteExpiresAt"
+    >) {
+      const t = this.get(id);
+      if (!t || t.status !== "funding" || t.fundingReceivedLamports !== "0")
+        throw new Error("Launch details can only change before funding");
+      return patchById(db, "tokens", id, patch, [
+        "name", "symbol", "description", "image", "website", "x", "telegram",
+        "metadataUri", "requiredLamports", "devBuyLamports", "launchSettingsJson",
+        "quoteExpiresAt",
+      ]);
+    },
+    setMarket(id: number, data: Pick<Token, "priceUsd" | "marketCapUsd">) {
+      return patchById(db, "tokens", id, data, ["priceUsd", "marketCapUsd"]);
     },
   };
 }

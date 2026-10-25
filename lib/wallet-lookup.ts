@@ -11,7 +11,8 @@ export interface WalletPageRequest {
 }
 
 export interface WalletHolding {
-  uid: string;
+  /** Token CA; public payloads never carry internal ids. */
+  mint: string;
   symbol: string;
   name: string;
   balance: number;

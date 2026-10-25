@@ -8,7 +8,6 @@ export function GET(): Response {
     const tokens = getStore()
       .listLive()
       .map((token) => ({
-        uid: token.uid,
         name: token.name,
         symbol: token.symbol,
         image: token.image,

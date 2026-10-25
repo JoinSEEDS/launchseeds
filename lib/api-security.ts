@@ -174,6 +174,26 @@ export function extractPathId(request: Request, prefix: string): string {
   return id;
 }
 
+/** Private launch-status handle: sha256(CA) prefix, or a pre-2026-10-25 launch id. */
+export const LAUNCH_HANDLE = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+export function extractPathHandle(request: Request, prefix: string): string {
+  const pathname = new URL(request.url).pathname;
+  if (!pathname.startsWith(`${prefix}/`)) throw new ApiError("Not found.", 404);
+  const handle = pathname.slice(prefix.length + 1);
+  if (!LAUNCH_HANDLE.test(handle)) throw new ApiError("Not found.", 404);
+  return handle;
+}
+
+/** Public token routes are addressed by CA (base58 mint), never internal ids. */
+export function extractPathMint(request: Request, prefix: string, suffix = ""): string {
+  const pathname = new URL(request.url).pathname;
+  if (!pathname.startsWith(`${prefix}/`) || !pathname.endsWith(suffix))
+    throw new ApiError("Not found.", 404);
+  const mint = pathname.slice(prefix.length + 1, pathname.length - suffix.length);
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) throw new ApiError("Not found.", 404);
+  return mint;
+}
+
 export function assertVotingPayload(body: Record<string, unknown>) {
   const action = body.action;
   if (action !== "challenge" && action !== "vote") {

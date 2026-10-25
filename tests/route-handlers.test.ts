@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { tokenFixture, seedHolder } from "./fixtures";
+import { insertToken, seedHolder } from "./fixtures";
 import { getStore } from "../src/server/runtime";
 import { GET as health } from "../app/api/health/route";
 import { GET as tokens } from "../app/api/tokens/route";
@@ -73,39 +73,44 @@ describe("method-specific route handlers", () => {
 
   test("live token data comes from the canonical store and is redacted", async () => {
     const store = getStore();
-    store.repo.tokens.insert(
-      tokenFixture({
-        uid,
-        name: "Example",
-        symbol: "EX",
-        mint: wallet,
-        fundingWallet: wallet,
-        rewardWallet: wallet,
-        creatorWallet: wallet,
-      }),
-    );
-    seedHolder(store, uid, wallet);
+    const token = insertToken(store, {
+      handle: uid.replaceAll("-", ""),
+      name: "Example",
+      symbol: "EX",
+      mint: wallet,
+      fundingWallet: wallet,
+      rewardWallet: wallet,
+      creatorWallet: wallet,
+    });
+    seedHolder(store, token.id, wallet);
 
     const listing = await body(tokens());
-    expect((listing.tokens as { uid: string }[]).map((x) => x.uid)).toContain(
-      uid,
+    expect((listing.tokens as { mint: string }[]).map((x) => x.mint)).toContain(
+      wallet,
     );
-    const details = await body(tokenDetails(url(`/api/tokens/${uid}`)));
-    expect(details.uid).toBe(uid);
+    // Public token APIs are addressed by CA and never return internal ids.
+    expect(JSON.stringify(listing)).not.toContain(token.handle);
+    expect((listing.tokens as object[])[0]).not.toHaveProperty("id");
+    expect((await tokenDetails(url(`/api/tokens/${uid}`))).status).toBe(404);
+    const details = await body(tokenDetails(url(`/api/tokens/${wallet}`)));
+    expect(details.mint).toBe(wallet);
+    expect(JSON.stringify(details)).not.toContain(token.handle);
+    expect(details).not.toHaveProperty("id");
     expect(details).not.toHaveProperty("accessHash");
     expect(details).not.toHaveProperty("fundingWallet");
     expect(details).not.toHaveProperty("requestHash");
-    const metadata = await body(tokenMetadata(url(`/api/metadata/${uid}`)));
+    const metadata = await body(tokenMetadata(url(`/api/metadata/${wallet}`)));
     expect(metadata.name).toBe("Example");
     expect(metadata.description).toBe("Official description");
     const chance = await body(
-      holderChance(url(`/api/tokens/${uid}/chance?wallet=${wallet}`)),
+      holderChance(url(`/api/tokens/${wallet}/chance?wallet=${wallet}`)),
     );
     expect(chance.balance).toBe(25);
     expect(chance.gravity).toBe(100);
     expect(chance.probability).toBe(1);
-    const status = await body(await launchStatus(url(`/api/launches/${uid}`)));
-    expect(status.uid).toBe(uid);
+    const status = await body(await launchStatus(url(`/api/launches/${token.handle}`)));
+    expect(status.handle).toBe(token.handle);
+    expect(status).not.toHaveProperty("id");
     expect(status).not.toHaveProperty("accessHash");
   });
 

@@ -1,6 +1,6 @@
 import { strategyBoard, hasStrategy } from "../../lib/governance";
 import { createMeasure } from "measure-fn";
-import type { SolardSource } from "./solard";
+import type { createLaunchseedsCoreServices } from "../services";
 import type { Store } from "./store";
 import type { LaunchService } from "./launch";
 import { getPublicTreasuryView } from "./treasury-view";
@@ -14,13 +14,13 @@ const { measure } = createMeasure("launchseeds:worker");
  */
 export async function runCycle(input: {
   store: Store;
-  source?: SolardSource;
+  services?: ReturnType<typeof createLaunchseedsCoreServices>;
   launch?: LaunchService;
 }) {
   return measure("worker cycle", async () => {
-    const errors: { uid: string; operation: string; error: string }[] = [];
+    const errors: { tokenId: number; operation: string; error: string }[] = [];
     const attempt = async (
-      uid: string,
+      tokenId: number,
       operation: string,
       action: () => Promise<unknown>,
     ) => {
@@ -28,50 +28,39 @@ export async function runCycle(input: {
         await action();
       } catch (error) {
         errors.push({
-          uid,
+          tokenId,
           operation,
           error: error instanceof Error ? error.message : "Unknown error",
         });
       }
     };
-    for (const request of input.store.repo.operations.pendingLaunches()) {
-      if (input.launch && hasStrategy(request.uid))
-        await attempt(request.uid, "resume preparation", () =>
-          input.launch!.resumePreparation(request.uid),
-        );
-    }
     for (const token of input.store.listWork()) {
       if (token.status === "preparing") {
         // Never resume a fundable launch without its immutable first strategy.
-        if (input.launch && hasStrategy(token.uid))
-          await attempt(token.uid, "resume preparation", () =>
-            input.launch!.resumePreparation(token.uid),
+        if (input.launch && hasStrategy(token.id))
+          await attempt(token.id, "resume preparation", () =>
+            input.launch!.resumePreparation(token.id),
           );
         continue;
       }
       if (token.status === "funding" || token.status === "deploying") {
         if (input.launch)
-          await attempt(token.uid, "launch", () =>
-            input.launch!.process(token.uid),
+          await attempt(token.id, "launch", () =>
+            input.launch!.process(token.id),
           );
         continue;
       }
       if (token.status !== "live") continue;
-      if (input.source)
-        await attempt(token.uid, "gravity", async () => {
-          const data = await input.source!.sample(
-            token.mint,
-            (process.env.LAUNCHSEEDS_EXCLUDED_WALLETS || "")
-              .split(",")
-              .filter(Boolean),
-          );
-          input.store.applySnapshot(token.id, data.snapshot, data.priceUsd);
+      if (input.services)
+        await attempt(token.id, "holders and Gravity", async () => {
+          await input.services!.holders.syncSnapshot(token.id);
+          await input.services!.gravity.accrueMinute(token.id);
         });
-      await attempt(token.uid, "strategy takeover", async () => {
-        strategyBoard(token.uid);
+      await attempt(token.id, "strategy takeover", async () => {
+        input.services?.governance.refreshLeader(token.id);
       });
-      await attempt(token.uid, "treasury observation", async () => {
-        await getPublicTreasuryView(token.uid, {
+      await attempt(token.id, "treasury observation", async () => {
+        await getPublicTreasuryView(token.id, {
           checkRpc: true,
           recordObservation: true,
         });

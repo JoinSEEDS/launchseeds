@@ -1,0 +1,11 @@
+--- a/dist/node.js
++++ b/dist/node.js
+@@ -4,7 +4,7 @@
+ let converter;
+ {
+     try {
+-        converter = require('bindings')('bigint_buffer');
++        if (!process.versions.bun) converter = require('bindings')('bigint_buffer');
+     }
+     catch (e) {
+         console.warn('bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)');

@@ -1,8 +1,6 @@
-diff --git a/index.ts b/index.ts
-index 4029672fd306d89927e434d4650a73450bb51627..c8f33a168dc3eb2f75030b28a45b22ec32d69e93 100644
 --- a/index.ts
 +++ b/index.ts
-@@ -176,7 +176,7 @@ const isActionObject = (value: unknown): value is Exclude<MeasureAction, string>
+@@ -176,7 +176,7 @@
    return typeof value === 'object' && value !== null;
  };
  
@@ -11,7 +9,7 @@ index 4029672fd306d89927e434d4650a73450bb51627..c8f33a168dc3eb2f75030b28a45b22ec
    if (isActionObject(actionInternal) && 'label' in actionInternal) {
      return String(actionInternal.label);
    }
-@@ -184,7 +184,7 @@ const buildActionLabel = (actionInternal: MeasureAction): string => {
+@@ -184,7 +184,7 @@
    return String(actionInternal);
  };
  
@@ -20,7 +18,7 @@ index 4029672fd306d89927e434d4650a73450bb51627..c8f33a168dc3eb2f75030b28a45b22ec
    if (!isActionObject(actionInternal)) return undefined;
    if (!('budget' in actionInternal)) return undefined;
    if (actionInternal.budget === undefined) return undefined;
-@@ -192,7 +192,7 @@ const extractBudget = (actionInternal: MeasureAction): number | undefined => {
+@@ -192,7 +192,7 @@
    return Number(actionInternal.budget);
  };
  
@@ -29,7 +27,7 @@ index 4029672fd306d89927e434d4650a73450bb51627..c8f33a168dc3eb2f75030b28a45b22ec
    if (!isActionObject(actionInternal)) return undefined;
    if (!('timeout' in actionInternal)) return undefined;
    if (actionInternal.timeout === undefined) return undefined;
-@@ -200,7 +200,7 @@ const extractTimeout = (actionInternal: MeasureAction): number | undefined => {
+@@ -200,7 +200,7 @@
    return Number(actionInternal.timeout);
  };
  
@@ -38,7 +36,7 @@ index 4029672fd306d89927e434d4650a73450bb51627..c8f33a168dc3eb2f75030b28a45b22ec
    if (!isActionObject(actionInternal)) return undefined;
    if (!('maxResultLength' in actionInternal)) return undefined;
    if (actionInternal.maxResultLength === undefined) return undefined;
-@@ -217,7 +217,7 @@ const extractResultMapper = <T>(
+@@ -217,7 +217,7 @@
    return actionInternal.result;
  };
  

@@ -140,6 +140,22 @@ describe("operational launch admission", () => {
 });
 
 describe("durable worker heartbeat", () => {
+  test("heartbeats sustain a long active cycle without bypassing stalled-cycle checks", () => {
+    const repo = new WorkerHealthRepository(":memory:");
+    try {
+      const id=repo.begin("long-cycle",NOW-60_000);
+      repo.startCycle(id,NOW-59_000);
+      repo.finishCycle(id,true,"",NOW-50_000);
+      repo.startCycle(id,NOW-40_000);
+      expect(assessLaunchReadiness(healthy({worker:repo.read()})).enabled).toBe(false);
+      repo.touch(id,NOW);
+      expect(assessLaunchReadiness(healthy({worker:repo.read()})).enabled).toBe(true);
+      repo.touch(id,NOW+190_000);
+      const result=assessLaunchReadiness(healthy({now:NOW+190_000,worker:repo.read(),rpc:{healthy:true,checkedAt:NOW+190_000,slot:100}}));
+      expect(result.enabled).toBe(false);
+      expect(result.blockers).toContain("worker_cycle_stalled");
+    } finally {repo.close();}
+  });
   test("only a successful cycle permits worker health", () => {
     const repo = new WorkerHealthRepository(":memory:");
     try {
@@ -178,6 +194,23 @@ describe("durable worker heartbeat", () => {
       repo.finishCycle(id, false, "rpc down", NOW + 200);
       expect(repo.read()?.healthy).toBe(false);
       expect(repo.read()?.lastError).toBe("rpc down");
+    } finally {
+      repo.close();
+    }
+  });
+  test("an ongoing normal cycle preserves the last successful result", () => {
+    const repo = new WorkerHealthRepository(":memory:");
+    try {
+      const id = repo.begin("worker", NOW);
+      repo.startCycle(id, NOW + 1);
+      expect(repo.read()?.healthy).toBe(false);
+      repo.finishCycle(id, true, "", NOW + 100);
+      repo.startCycle(id, NOW + 60_000);
+      expect(repo.read()?.healthy).toBe(true);
+      expect(repo.read()?.completedAt).toBe(NOW + 100);
+      repo.finishCycle(id, false, "rpc down", NOW + 60_100);
+      repo.startCycle(id, NOW + 120_000);
+      expect(repo.read()?.healthy).toBe(false);
     } finally {
       repo.close();
     }

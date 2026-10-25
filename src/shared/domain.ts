@@ -1,3 +1,4 @@
+import { validTelegram, normalizeX } from "../../lib/launch-socials";
 import { createHash } from "node:crypto";
 import { z } from "sqlite-zod-orm";
 /** Mainnet USDC mint; never infer a treasury balance from another mint. */
@@ -26,12 +27,10 @@ export const launchInput = z.object({
     .regex(/^[A-Za-z0-9]{1,10}$/)
     .transform((value) => value.toUpperCase()),
   description: z.string().trim().max(1000).default(""),
-  image: z
-    .string()
-    .url()
-    .refine((value) => value.startsWith("https://"), "Image must use HTTPS"),
+  image: z.string().refine(value => /^\/api\/media\/[a-f0-9]{64}\.(png|jpg|gif|webp)$/.test(value) || /^https:\/\//.test(value), "Use an uploaded token image or HTTPS image URL"),
   website: z
     .string()
+    .trim()
     .max(200)
     .default("")
     .refine(
@@ -40,19 +39,22 @@ export const launchInput = z.object({
     ),
   x: z
     .string()
+    .trim()
     .max(100)
     .default("")
     .refine(
-      (v) => !v || /^@?[A-Za-z0-9_]{1,15}$/.test(v),
+      (v) => !v || /^@?[A-Za-z0-9_]{1,15}$/.test(normalizeX(v)),
       "Enter an X handle such as @launchseeds",
-    ),
+    )
+    .transform(normalizeX),
   telegram: z
     .string()
+    .trim()
     .max(100)
     .default("")
     .refine(
       (v) =>
-        !v || /^(?:https:\/\/t\.me\/|t\.me\/|@)?[A-Za-z0-9_]{5,32}$/.test(v),
+        validTelegram(v),
       "Enter a Telegram handle or t.me link",
     ),
   devBuySol: z

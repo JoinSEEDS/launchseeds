@@ -1,4 +1,5 @@
 import { render } from "tradjs/client";
+import { elapsedText } from "../../../src/domain/launch-settings";
 import {
   publishWallet,
   publishWalletDisconnected,
@@ -47,12 +48,18 @@ type Position = {
   gravity: number;
   totalGravity: number;
 };
+type HolderSnapshot = {
+  mint: string;
+  symbol: string;
+  leaderboard: { holders: (Position & { heldSince: number; probability: number })[] };
+};
 
 type VoteChallenge = { nonce: string; message: string; expiresAt: number };
 type TreasuryView = {
-  uid: string;
+  mint: string;
   ready: TreasuryReadiness;
   statusText: string;
+  unclaimedFeesMicros?: number | null;
   canExecute: false;
   asOf: number;
 };
@@ -62,7 +69,7 @@ function validTreasuryView(value: unknown): value is TreasuryView {
   if (!v.ready || typeof v.ready !== "object") return false;
   const r = v.ready as Record<string, unknown>;
   return (
-    typeof v.uid === "string" &&
+    typeof v.mint === "string" &&
     typeof v.statusText === "string" &&
     v.canExecute === false &&
     typeof r.observedAt === "number" &&
@@ -87,7 +94,8 @@ function errorText(error: unknown): string {
 export default function mount() {
   const host = document.getElementById("governed-token");
   if (!host) return;
-  const uid = host.dataset.tokenUid || "";
+  // Public APIs are addressed by the token's CA.
+  const mint = host.dataset.tokenMint || "";
   const distribution = element<HTMLElement>("strategy-distribution");
   const activeRoot = element<HTMLElement>("active-strategy");
   const votesRoot = document.querySelector<HTMLElement>("[data-votes-body]")!;
@@ -125,7 +133,7 @@ export default function mount() {
   const retrieveBoard = async (signal?: AbortSignal): Promise<PublicBoard> => {
     const search = wallet ? `?wallet=${encodeURIComponent(wallet)}` : "";
     const loaded = await getJson<unknown>(
-      `/api/strategies/${encodeURIComponent(uid)}${search}`,
+      `/api/strategies/${encodeURIComponent(mint)}${search}`,
       {
         signal,
         timeoutMs: 12_000,
@@ -137,6 +145,21 @@ export default function mount() {
 
   /** The live countdown reads the *server* deadline; it never changes state. */
   const updateCountdown = () => {
+    const activeLock = document.getElementById("active-lock-text");
+    if (activeLock) {
+      const until = Number(activeLock.dataset.lockUntil ?? "0");
+      if (until > 0) {
+        const left = Math.max(0, until - Date.now());
+        const text = left >= 3_600_000 ?
+          `${Math.ceil(left / 3_600_000)}h` :
+          `${Math.ceil(left / 60_000)}m`;
+        activeLock.textContent = left <= 0 ? "open to takeover" : activeLock.dataset.creatorLocked === "true" ?
+          `locked for ${text}` : `can change in ${text}`;
+      }
+    }
+    const since = document.getElementById("active-since");
+    const started = Number(since?.dataset.activeSince ?? "0");
+    if (since && started > 0) since.textContent = `Active ${elapsedText(Date.now() - started)}`;
     const deadline = board?.takeoverAt ?? null;
     const text = countdownText(deadline);
     distribution
@@ -177,11 +200,11 @@ export default function mount() {
         </div>
         <dl className="dl">
           <dt>Indexed balance</dt>
-          <dd>{formatGravity(snapshot.balance)}</dd>
+          <dd data-num="">{formatGravity(snapshot.balance)}</dd>
           <dt>Voting gravity</dt>
-          <dd>{formatGravity(snapshot.gravity)}</dd>
+          <dd data-num="">{formatGravity(snapshot.gravity)}</dd>
           <dt>Eligible share</dt>
-          <dd>{share}</dd>
+          <dd data-num="">{share}</dd>
         </dl>
       </>,
       positionRoot,
@@ -203,14 +226,6 @@ export default function mount() {
               <div
                 className={`dist-row${status.active ? " is-active" : ""}${mine ? " is-mine" : ""}`}
               >
-                <span
-                  className="strat-ic strat-ic--sm"
-                  style={{ "--c": "var(--accent)" } as any}
-                >
-                  <svg aria-hidden="true">
-                    <use href={`#i-${row.config.type}`} />
-                  </svg>
-                </span>
                 <span className="ballot-name">
                   {catalog ? (
                     <StrategyLabel strategy={row.config} catalog={catalog} />
@@ -237,8 +252,8 @@ export default function mount() {
                   <span className="bar">
                     <i style={{ width: `${share}%` }} />
                   </span>
-                  <b>{formatPercentage(share)}</b>
-                  <small>
+                  <b data-num="">{formatPercentage(share)}</b>
+                  <small data-num="">
                     {formatGravity(row.gravity)} gravity · {row.voters} voters
                   </small>
                 </span>
@@ -273,24 +288,26 @@ export default function mount() {
         {votes.length ? (
           votes.map((vote) => (
             <tr>
-              <td className="mono" title={vote.wallet}>
-                {shortWallet(vote.wallet)}
+              <td>
+                <span className="cell-2">
+                  <span className="mono mono--md" title={vote.wallet}>{shortWallet(vote.wallet)}</span>
+                  <small>
+                    {formatGravity(vote.gravity)} gravity
+                    {board?.totalGravity
+                      ? ` · ${formatPercentage((vote.gravity * 100) / board.totalGravity)}`
+                      : ""}
+                  </small>
+                </span>
               </td>
               <td>{strategyName(vote.config, catalog || undefined)}</td>
-              <td className="num">{formatGravity(vote.gravity)}</td>
-              <td className="num">
-                {board?.totalGravity
-                  ? formatPercentage((vote.gravity * 100) / board.totalGravity)
-                  : "0%"}
-              </td>
-              <td className="num dim">
-                {new Date(vote.votedAt).toLocaleString()}
+              <td className="num dim" title={new Date(vote.votedAt).toLocaleString()}>
+                {`${elapsedText(Date.now() - vote.votedAt)} ago`}
               </td>
             </tr>
           ))
         ) : (
           <tr>
-            <td colSpan={5} className="empty-table">
+            <td colSpan={3} className="empty-table">
               No recorded votes.
             </td>
           </tr>
@@ -302,7 +319,7 @@ export default function mount() {
 
   /** Treasury updates are independent of the voting timer and never submit payments. */
   function paintTreasury(view: TreasuryView) {
-    if (destroyed || view.uid !== uid || view.ready.observedAt < lastTreasuryAt)
+    if (destroyed || view.mint !== mint || view.ready.observedAt < lastTreasuryAt)
       return;
     // Do not show a price for a different strategy during a leadership switch.
     if (board && view.ready.quote.strategyKey !== strategyKey(board.active))
@@ -315,6 +332,11 @@ export default function mount() {
     const progress = element<HTMLElement>("treasury-progress");
     const note = element<HTMLElement>("treasury-verification");
     available.textContent = microsToUsd(result.recordedAvailableMicros);
+    const fees = view.unclaimedFeesMicros;
+    if (typeof fees === "number") {
+      element<HTMLElement>("treasury-fees").textContent = microsToUsd(fees);
+      element<HTMLElement>("treasury-fees-row").hidden = false;
+    }
     needed.textContent =
       result.quote.costMicros === null
         ? "Awaiting price"
@@ -331,13 +353,11 @@ export default function mount() {
     if (bar) bar.style.width = `${result.progressPercent ?? 0}%`;
     // Funding validation stays server-side; do not surface data-source status in the UI.
     note.textContent = "";
-    const next = element<HTMLElement>("next-reward-name");
-    next.textContent = `Next: ${strategyName(result.strategy, catalog || undefined)}`;
   }
 
   async function refreshTreasury(signal?: AbortSignal) {
     const value = await getJson<unknown>(
-      `/api/treasury/${encodeURIComponent(uid)}`,
+      `/api/treasury/${encodeURIComponent(mint)}`,
       {
         signal,
         timeoutMs: 15_000,
@@ -360,6 +380,15 @@ export default function mount() {
       activeRoot,
     );
     paintDistribution();
+    const activeLock = document.getElementById("active-lock-text");
+    if (activeLock && typeof current.lockUntil === "number") {
+      activeLock.dataset.lockUntil = String(current.lockUntil);
+      activeLock.dataset.creatorLocked = current.creatorLockUntil !== undefined &&
+        current.creatorLockUntil > Date.now() &&
+        strategyKey(current.active) === strategyKey(current.initial)
+        ? "true" : "false";
+    }
+    updateCountdown();
     const allGravity = Math.max(0, current.totalGravity);
     const bar = document.querySelector<HTMLElement>("[data-turnout-bar]");
     if (bar)
@@ -392,10 +421,32 @@ export default function mount() {
 
   async function refreshBoard(signal?: AbortSignal) {
     const sequence = ++generation;
-    const loaded = await retrieveBoard(signal);
-    if (destroyed || sequence !== generation) return;
+    const requestedWallet = wallet;
+    const [loaded, snapshot, freshPosition] = await Promise.all([
+      retrieveBoard(signal),
+      getJson<HolderSnapshot>(`/api/tokens/${encodeURIComponent(mint)}`, { signal }),
+      requestedWallet ? getJson<Position>(
+        `/api/tokens/${encodeURIComponent(mint)}/chance?wallet=${encodeURIComponent(requestedWallet)}`,
+        { signal },
+      ) : Promise.resolve(null),
+    ]);
+    if (destroyed || sequence !== generation || wallet !== requestedWallet) return;
     board = loaded;
+    if (freshPosition?.wallet === requestedWallet) position = freshPosition;
     paintBoard();
+    const ledger = document.getElementById("gravity-ledger-body");
+    if (ledger && snapshot.mint === mint && Array.isArray(snapshot.leaderboard?.holders)) {
+      const holders = snapshot.leaderboard.holders.slice(0, 100);
+      render(<>{holders.length ? holders.map((holder) => (
+        <tr>
+          <td><span className="cell-2"><span className="mono mono--md" title={holder.wallet}>{shortWallet(holder.wallet)}</span>
+            <small>{formatGravity(holder.balance)} ${snapshot.symbol}</small></span></td>
+          <td className="num">{holder.heldSince ? elapsedText(Date.now() - holder.heldSince) : "—"}</td>
+          <td><span className="meter"><span className="bar"><i style={{width: `${100 * holder.probability}%`}} /></span>
+            <b>{formatPercentage(100 * holder.probability)}</b></span><small data-num="">{formatGravity(holder.gravity)} gravity</small></td>
+        </tr>
+      )) : <tr><td colSpan={3} className="empty-table">No indexed eligible holders.</td></tr>}</>, ledger);
+    }
   }
 
   function startPolling() {
@@ -429,7 +480,7 @@ export default function mount() {
     trackWalletProvider(found);
     publishWallet(account);
     const accountInfo = await getJson<Position>(
-      `/api/tokens/${encodeURIComponent(uid)}/chance?wallet=${encodeURIComponent(wallet)}`,
+      `/api/tokens/${encodeURIComponent(mint)}/chance?wallet=${encodeURIComponent(wallet)}`,
     );
     if (destroyed || wallet !== account) return wallet;
     position = accountInfo;
@@ -470,7 +521,7 @@ export default function mount() {
     paintPosition();
     const requested = next;
     void getJson<Position>(
-      `/api/tokens/${encodeURIComponent(uid)}/chance?wallet=${encodeURIComponent(requested)}`,
+      `/api/tokens/${encodeURIComponent(mint)}/chance?wallet=${encodeURIComponent(requested)}`,
     )
       .then(async (fresh) => {
         if (destroyed || wallet !== requested) return;
@@ -526,6 +577,7 @@ export default function mount() {
   openButton.addEventListener("click", () => openVote());
   closeButton.addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => setMessage(modalMessage, ""));
+  // Outside-click close for every dialog is handled once in app/layout.client.tsx.
 
   function setSigning(value: boolean) {
     signing = value;
@@ -560,7 +612,7 @@ export default function mount() {
       if (!provider) throw new Error("Wallet signing is unavailable.");
       setMessage(modalMessage, "Requesting a one-time voting challenge…");
       const challenge = await postJson<VoteChallenge>(
-        `/api/strategies/${encodeURIComponent(uid)}`,
+        `/api/strategies/${encodeURIComponent(mint)}`,
         { action: "challenge", wallet, strategy: candidate.config },
       );
       if (
@@ -576,7 +628,7 @@ export default function mount() {
         "utf8",
       );
       const result = await postJson<unknown>(
-        `/api/strategies/${encodeURIComponent(uid)}`,
+        `/api/strategies/${encodeURIComponent(mint)}`,
         {
           action: "vote",
           wallet,
@@ -600,24 +652,6 @@ export default function mount() {
     }
   });
 
-  // Existing SSR nodes keep their own listeners. No enclosing client root or
-  // extra TradJS boundary abstraction is required.
-  for (const button of document.querySelectorAll<HTMLButtonElement>(
-    "[data-ledger]",
-  )) {
-    button.addEventListener("click", () => {
-      const selected = button.dataset.ledger;
-      for (const kind of ["rewards", "votes", "gravity"]) {
-        const shown = kind === selected;
-        element<HTMLElement>(`ledger-${kind}`).hidden = !shown;
-        const tab = document.querySelector<HTMLButtonElement>(
-          `[data-ledger="${kind}"]`,
-        );
-        tab?.setAttribute("aria-selected", String(shown));
-        tab?.setAttribute("tabindex", shown ? "0" : "-1");
-      }
-    });
-  }
   // The shared layout owns delegated copy actions. Avoid duplicate listeners.
 
   async function initialize() {
@@ -644,6 +678,7 @@ export default function mount() {
           };
     builder = createStrategyBuilder(voteRoot, {
       catalog,
+      tabs: ["pack", "stock"],
       initial: board.active,
       onChange: (value) => {
         if (value && board)

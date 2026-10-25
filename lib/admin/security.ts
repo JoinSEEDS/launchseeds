@@ -14,7 +14,7 @@ export const ADMIN_COOKIE = "launchseeds_admin";
 export const SESSION_SECONDS = 4 * 60 * 60;
 const MAX_FUTURE_SECONDS = 60;
 const LOGIN_MAX_BYTES = 2_048;
-const badLogin = new IngressRateLimiter("admin-login", 8, 10 * 60_000, 120);
+const badLogin = new IngressRateLimiter("admin-login", 5, 15 * 60_000, 60);
 
 export function adminEnabled(
   environment: NodeJS.ProcessEnv = process.env,

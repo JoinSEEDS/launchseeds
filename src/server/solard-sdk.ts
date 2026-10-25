@@ -27,6 +27,13 @@ export interface SolardClient {
     tokens: string[];
     history: false;
   }): Promise<TradeListener>;
+  /** Read-only: no signer or submission is involved. */
+  getClaimableCreatorFees(
+    wallet: string,
+    options: { tokens: string[] },
+  ): Promise<{
+    groups: { quoteMint: string; quoteDecimals: number; amountRaw: bigint }[];
+  }>;
   close(): void;
 }
 export interface TradeListener {
@@ -70,6 +77,8 @@ export interface TraderClient {
 
   listWallets(): { name: string | null; address: string }[];
   createWallet(name: string): { address: string };
+  /** `privateKey` is a JSON byte array or base58 secret key. */
+  importWallet(privateKey: string, name?: string): { address: string };
   signer(wallet: string): Keypair;
   prepareTokenDeployment(
     launchpad: string,
@@ -107,4 +116,13 @@ export async function loadSolard() {
       dbPath: string;
     }): TraderClient;
   };
+}
+
+export interface PumpMetadataInput {
+ imagePath:string;name:string;symbol:string;description?:string;website?:string;twitter?:string;telegram?:string;
+}
+export type MetadataUploader = (input:PumpMetadataInput,options?:{provider?:"pump-frontend"|"pinata";fallback?:null})=>Promise<{metadataUri:string}>;
+export async function loadMetadataUploader():Promise<MetadataUploader> {
+ const name:string="@solard/core";
+ return ((await import(name)) as {uploadPumpMetadata:MetadataUploader}).uploadPumpMetadata;
 }

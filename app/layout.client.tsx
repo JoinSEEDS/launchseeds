@@ -5,11 +5,41 @@ import {
   subscribeWallet,
   walletAddress,
 } from "../lib/wallet-session";
+import { watchLiveNumbers } from "../lib/live-numbers";
+
+/** Every popup closes on an outside click; Esc is built into <dialog>.
+ * A press must start and end on the backdrop (outside the dialog box), so a
+ * text selection dragged out of the dialog does not close it. */
+function closeDialogsOnBackdrop(): () => void {
+  let pressed: HTMLDialogElement | null = null;
+  const outside = (dialog: HTMLDialogElement, event: MouseEvent) => {
+    const r = dialog.getBoundingClientRect();
+    return event.clientX < r.left || event.clientX > r.right ||
+      event.clientY < r.top || event.clientY > r.bottom;
+  };
+  const down = (event: PointerEvent) => {
+    const target = event.target;
+    pressed = target instanceof HTMLDialogElement && target.open && outside(target, event) ? target : null;
+  };
+  const click = (event: MouseEvent) => {
+    const target = event.target;
+    if (pressed && target === pressed && outside(pressed, event)) pressed.close("cancel");
+    pressed = null;
+  };
+  document.addEventListener("pointerdown", down);
+  document.addEventListener("click", click);
+  return () => {
+    document.removeEventListener("pointerdown", down);
+    document.removeEventListener("click", click);
+  };
+}
 
 /** Header reflects one shared wallet session; never creates a demo wallet. */
 export default function mount() {
+  const releaseDialogs = closeDialogsOnBackdrop();
+  const stopNumbers = watchLiveNumbers();
   const button = document.querySelector<HTMLButtonElement>("[data-wallet-btn]");
-  if (!button) return;
+  if (!button) return () => { releaseDialogs(); stopNumbers(); };
 
   let busy = false;
   const repaint = (address = walletAddress()) => {
@@ -58,18 +88,34 @@ export default function mount() {
     else anchor.removeAttribute("aria-current");
   }
 
+  const copyLabels = new WeakMap<HTMLElement, string>();
+  const copyTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
   const copies = (event: MouseEvent) => {
     const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
       "[data-copy]",
     );
     if (!target) return;
     void copyText(target.dataset.copy || "").then((ok) => {
-      if (ok) target.textContent = "Copied";
+      if (!ok) return;
+      // Keep the original label across repeated clicks, then restore it.
+      const label = copyLabels.get(target) ?? target.textContent ?? "";
+      copyLabels.set(target, label);
+      clearTimeout(copyTimers.get(target));
+      target.textContent = "Copied";
+      copyTimers.set(
+        target,
+        setTimeout(() => {
+          target.textContent = label;
+          copyLabels.delete(target);
+        }, 1500),
+      );
     });
   };
   button.addEventListener("click", connect);
   document.addEventListener("click", copies);
   return () => {
+    releaseDialogs();
+    stopNumbers();
     button.removeEventListener("click", connect);
     document.removeEventListener("click", copies);
     unsubscribe();

@@ -52,7 +52,7 @@ export default function RootLayout({ children }: { children: any }) {
             <nav className="nav" aria-label="Main">
               <a href="/">Launchpad</a>
               <a href="/token">$TOKEN</a>
-              <a href="/wallet">Wallet</a>
+              <a href="/wallet">Verify</a>
             </nav>
             <div className="topbar__actions">
               <button className="btn btn--wallet" type="button" data-wallet-btn>

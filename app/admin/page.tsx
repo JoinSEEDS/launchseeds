@@ -159,38 +159,7 @@ export default function AdminPage() {
               </div>
             </div>
             <div className="admin__log-controls">
-              <div className="tabs" role="tablist" aria-label="Log streams">
-                <button
-                  type="button"
-                  role="tab"
-                  id="admin-log-both"
-                  className="tab"
-                  aria-selected="true"
-                  data-log-kind="both"
-                >
-                  Combined
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  id="admin-log-out"
-                  className="tab"
-                  aria-selected="false"
-                  data-log-kind="stdout"
-                >
-                  stdout
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  id="admin-log-err"
-                  className="tab"
-                  aria-selected="false"
-                  data-log-kind="stderr"
-                >
-                  stderr
-                </button>
-              </div>
+              <span className="admin__log-heading">Logs</span>
               <label className="admin__autoscroll">
                 <input type="checkbox" id="admin-follow" defaultChecked />{" "}
                 Follow
@@ -217,9 +186,20 @@ export default function AdminPage() {
                 Not connected
               </span>
             </div>
-            <pre className="admin__logs" id="admin-log-output" tabIndex={0}>
-              Select a process to view its logs.
-            </pre>
+            <div className="admin__log-streams">
+              <section className="admin__log-stream" aria-labelledby="admin-log-stdout-title">
+                <h3 className="admin__log-title" id="admin-log-stdout-title">stdout</h3>
+                <pre className="admin__logs" id="admin-log-stdout" tabIndex={0}>
+                  Select a process to view its logs.
+                </pre>
+              </section>
+              <section className="admin__log-stream admin__log-stream--err" aria-labelledby="admin-log-stderr-title">
+                <h3 className="admin__log-title" id="admin-log-stderr-title">stderr</h3>
+                <pre className="admin__logs" id="admin-log-stderr" tabIndex={0}>
+                  Select a process to view its logs.
+                </pre>
+              </section>
+            </div>
             <p
               className="admin__footnote"
               id="admin-action-message"

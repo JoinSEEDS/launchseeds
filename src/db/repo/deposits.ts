@@ -1,16 +1,27 @@
-import { schemas, type Deposit } from "../schema";
-import { records, rows, change, type SqlDb } from "./util";
+import { schemas, type NewRows } from "../schema";
+import { record, records, rows, change, type SqlDb } from "./util";
 export function depositRepo(db: SqlDb) {
   return {
-    insertIfNew(input: Deposit): boolean {
+    record(input: NewRows["deposits"]): boolean {
+      const existing = record(db, "deposits", "signature = ?", input.signature);
+      if (existing) {
+        if (
+          existing.tokenId !== input.tokenId ||
+          existing.lamports !== input.lamports
+        )
+          throw new Error("Deposit already assigned or inconsistent");
+        return false;
+      }
+      return this.insertIfNew(input);
+    },
+    insertIfNew(input: NewRows["deposits"]): boolean {
       const d = schemas.deposits.parse(input);
       return (
         rows(
           db,
           `INSERT INTO deposits
-        (uid,tokenId,signature,lamports,confirmedSlot,confirmedAt,refundSignature)
-        VALUES (?,?,?,?,?,?,?) ON CONFLICT(signature) DO NOTHING RETURNING uid`,
-          d.uid,
+        (tokenId,signature,lamports,confirmedSlot,confirmedAt,refundSignature)
+        VALUES (?,?,?,?,?,?) ON CONFLICT(signature) DO NOTHING RETURNING id`,
           d.tokenId,
           d.signature,
           d.lamports,
@@ -20,7 +31,7 @@ export function depositRepo(db: SqlDb) {
         ).length > 0
       );
     },
-    listByToken(tokenId: string) {
+    listByToken(tokenId: number) {
       return records(
         db,
         "deposits",
@@ -28,7 +39,7 @@ export function depositRepo(db: SqlDb) {
         tokenId,
       );
     },
-    sumLamports(tokenId: string) {
+    sumLamports(tokenId: number) {
       return records(db, "deposits", "tokenId = ?", tokenId).reduce(
         (sum, x) => sum + BigInt(x.lamports),
         0n,

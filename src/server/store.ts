@@ -1,3 +1,6 @@
+import { createLaunchseedsCoreServices } from "../services";
+import { humanToRaw } from "../domain/holders";
+import { ed25519VoteVerifier } from "../integrations/ed25519";
 /** Presentation/service facade. All authoritative reads and writes use src/db repositories. */
 import type { openLaunchseedsData } from "../db";
 import type { Token } from "../db/schema";
@@ -13,17 +16,7 @@ export const safeNumber = (value: string | bigint) => {
     throw new Error("Amount exceeds numeric API range");
   return n;
 };
-export function humanToRaw(value: string, decimals: number): string {
-  if (!/^(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(value))
-    throw new Error("Invalid human token quantity");
-  const [whole, fraction = ""] = value.split(".");
-  if (fraction.slice(decimals).replace(/0/g, ""))
-    throw new Error("Token quantity exceeds mint precision");
-  return (
-    BigInt(whole!) * 10n ** BigInt(decimals) +
-    BigInt(fraction.slice(0, decimals).padEnd(decimals, "0") || "0")
-  ).toString();
-}
+export { humanToRaw } from "../domain/holders";
 export class Store {
   readonly repo;
   constructor(readonly data: ReturnType<typeof openLaunchseedsData>) {
@@ -33,22 +26,20 @@ export class Store {
     this.data.database.close();
   }
   view(token: Token) {
-    const state = this.repo.operations.state(token.uid);
-    const treasury = this.repo.treasuries.getByOwner(
-      "token",
-      token.uid,
-      "USDC",
-    );
+    const state = this.repo.operations.state(token.id);
+    const treasury = this.repo.treasuries.getByOwner(token.id, "USDC");
     // Existing UI labels USD evidence. Never present SOL atomic balances as USDC.
     const totals = treasury
-      ? this.repo.ledger.totals(treasury.uid)
+      ? this.repo.ledger.totals(treasury.id)
       : { collected: 0n, spent: 0n };
     const reserved = treasury ? safeNumber(treasury.reservedAtomic) : 0;
     return {
       ...token,
-      id: token.uid,
       mint: token.mint || "",
       fundingWallet: token.fundingWallet,
+      // Set once preparation completes; empty only while `preparing`.
+      rewardWallet: token.rewardWallet ?? "",
+      creatorWallet: token.creatorWallet ?? "",
       requiredLamports: safeNumber(token.requiredLamports),
       devBuyLamports: safeNumber(token.devBuyLamports),
       receivedLamports: safeNumber(token.fundingReceivedLamports),
@@ -61,8 +52,14 @@ export class Store {
       gravityUpdatedAt: (token.lastGravityMinute ?? 0) * 60_000,
     };
   }
-  token(uid: string) {
-    const token = this.repo.tokens.get(uid);
+  /** Internal id of a live token from its public CA; unknown or not live → Not found. */
+  liveTokenId(mint: string): number {
+    const token = this.repo.tokens.getByMint(mint);
+    if (!token || token.status !== "live") throw new Error("Not found");
+    return token.id;
+  }
+  token(id: number) {
+    const token = this.repo.tokens.get(id);
     if (!token) throw new Error("Not found");
     return this.view(token);
   }
@@ -75,11 +72,11 @@ export class Store {
   listWork() {
     return this.repo.tokens.all().map((x) => this.view(x));
   }
-  leaderboard(uid: string) {
-    const token = this.repo.tokens.get(uid);
+  leaderboard(id: number) {
+    const token = this.repo.tokens.get(id);
     if (!token) throw new Error("Not found");
-    const all = this.repo.holders.active(uid);
-    const total = this.repo.holders.totalGravity(uid);
+    const all = this.repo.holders.active(id);
+    const total = this.repo.holders.totalGravity(id);
     return {
       totalGravity: Number(total) / 1e6,
       totalGravityMicros: total.toString(),
@@ -95,6 +92,7 @@ export class Store {
           wallet: h.wallet,
           balance: Number(h.balanceRaw) / 10 ** token.tokenDecimals,
           balanceRaw: h.balanceRaw,
+          heldSince: h.heldSince,
           gravityMicros: h.gravityMicros,
           gravity: Number(h.gravityMicros) / 1e6,
           probability:
@@ -104,8 +102,9 @@ export class Store {
         })),
     };
   }
-  applySnapshot(
-    uid: string,
+  /** Compatibility adapter for injected observations; domain behavior belongs to src/services. */
+  async applySnapshot(
+    id: number,
     snapshot: {
       holders: Holder[];
       slot: number;
@@ -115,67 +114,51 @@ export class Store {
     priceUsd: number,
     now = Date.now(),
   ) {
-    return this.repo.tx((tx) => {
-      if (
-        !snapshot.complete ||
-        snapshot.observedAt > now + 5000 ||
-        now - snapshot.observedAt > 120_000
-      )
-        throw new Error("Incomplete or stale snapshot");
-      validateHolders(snapshot.holders);
-      positive(priceUsd);
-      safeInteger(snapshot.slot);
-      safeInteger(now);
-      const token = tx.tokens.get(uid);
-      if (!token || token.status !== "live")
-        throw new Error("Token is not live");
-      const state = tx.operations.state(uid);
-      if (
-        snapshot.slot < token.holdersSnapshotSlot ||
-        snapshot.observedAt < (state?.snapshotAt || 0)
-      )
-        return false;
-      const observed = new Set(snapshot.holders.map((h) => h.wallet));
-      for (const previous of tx.holders.byToken(uid))
-        if (!observed.has(previous.wallet))
-          tx.holders.syncBalance({
-            tokenId: uid,
-            wallet: previous.wallet,
-            balanceRaw: "0",
-            slot: snapshot.slot,
-            observedAt: snapshot.observedAt,
-          });
-      for (const holder of snapshot.holders) {
-        const raw =
-          holder.balanceRaw ??
-          humanToRaw(
-            holder.balanceUi ?? holder.balance.toFixed(token.tokenDecimals),
-            token.tokenDecimals,
-          );
-        tx.holders.syncBalance({
-          tokenId: uid,
-          wallet: holder.wallet,
-          balanceRaw: raw,
+    validateHolders(snapshot.holders);
+    positive(priceUsd);
+    const token = this.repo.tokens.get(id);
+    if (!token) throw new Error("Not found");
+    const source = {
+      async snapshot() {
+        return {
+          complete: snapshot.complete,
           slot: snapshot.slot,
           observedAt: snapshot.observedAt,
-        });
-        tx.holders.exclude(uid, holder.wallet, Boolean(holder.excluded));
-      }
-      tx.tokens.setSnapshot(uid, snapshot.slot);
-      if (state)
-        tx.operations.updateState(uid, { snapshotAt: snapshot.observedAt });
-      tx.tokens.setMarket(uid, { priceUsd, marketCapUsd: token.marketCapUsd });
-      return tx.holders.accrueMinute(
-        uid,
-        Math.floor(now / 60_000),
-        BigInt(Math.round(priceUsd * 1e12)),
-      );
+          balances: snapshot.holders.map((h) => ({
+            wallet: h.wallet,
+            balanceRaw:
+              h.balanceRaw ??
+              humanToRaw(
+                h.balanceUi ?? h.balance.toFixed(token.tokenDecimals),
+                token.tokenDecimals,
+              ),
+            excluded: Boolean(h.excluded),
+          })),
+        };
+      },
+      async balance() {
+        throw new Error("No individual balance supplied");
+      },
+    };
+    const services = createLaunchseedsCoreServices({
+      repo: this.repo,
+      holders: source,
+      market: {
+        async priceUsd() {
+          return priceUsd.toFixed(12).replace(/\.?0+$/, "") || "0";
+        },
+      },
+      voteVerifier: ed25519VoteVerifier,
+      chain: "test:injected",
+      clock: () => now,
+      requireFreshSnapshot: true,
     });
+    await services.holders.syncSnapshot(id);
+    return services.gravity.accrueMinute(id);
   }
-  publicToken(uid: string) {
-    const t = this.token(uid);
+  publicToken(id: number) {
+    const t = this.token(id);
     return {
-      uid: t.uid,
       name: t.name,
       symbol: t.symbol,
       description: t.description,
@@ -190,7 +173,7 @@ export class Store {
       spentMicros: t.spentMicros,
       reservedMicros: t.reservedMicros,
       createdAt: t.createdAt,
-      leaderboard: this.leaderboard(uid),
+      leaderboard: this.leaderboard(id),
     };
   }
 }

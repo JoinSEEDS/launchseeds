@@ -134,6 +134,20 @@ export async function postJson<T>(
   }, options);
 }
 
+export async function patchJson<T>(
+  url: string,
+  value: unknown,
+  options: RequestOptions = {},
+): Promise<T> {
+  return withAbort(async (signal) => {
+    const headers = new Headers(options.headers);
+    headers.set("content-type", "application/json");
+    return parseJsonResponse<T>(await fetch(url, {
+      method: "PATCH", headers, body: JSON.stringify(value), signal,
+    }));
+  }, options);
+}
+
 export async function uploadImage<T>(
   url: string,
   file: File,

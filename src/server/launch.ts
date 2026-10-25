@@ -1,5 +1,10 @@
+import { createHash } from "node:crypto";
 import { DESCRIPTION } from "../../lib/strategy";
+import { ApiError } from "../../lib/api-security";
+import { DEFAULT_LAUNCH_SETTINGS, canonicalLaunchSettings, storedLaunchSettings, type LaunchSettings } from "../domain/launch-settings";
 import { Store, safeNumber } from "./store";
+import { canonicalStrategy } from "../domain/strategies";
+import type { StrategyConfigValue, Token } from "../db/schema";
 import {
   hash,
   launchInput,
@@ -8,22 +13,34 @@ import {
   type LaunchInput,
 } from "../shared/domain";
 export interface LaunchProvider {
+  /** Generates and stores the token's mint keypair; the CA stays private until deployed. */
+  createMint(): { mintSignerRef: string; mint: string };
   prepare(input: {
-    uid: string;
+    tokenId: number;
     name: string;
     symbol: string;
     description: string;
     image: string;
     website: string;
+    x?:string;
+    telegram?:string;
     devBuyLamports: number;
+    refreshMetadata?: boolean;
+    /** Existing launches keep their stored wallet names. */
+    fundingWalletName?: string | null;
+    mintSignerRef?: string | null;
   }): Promise<{
     fundingWallet: string;
+    fundingWalletName: string;
+    mintSignerRef: string | null;
     rewardWallet: string;
     metadataUri: string;
     requiredLamports: number;
   }>;
+  /** Best-effort early observation. A pending signature may precede finalized deposits. */
+  hasIncomingFunds?(fundingWallet: string): Promise<boolean>;
   deposits(
-    tokenUid: string,
+    tokenId: number,
     fundingWallet: string,
   ): Promise<
     {
@@ -34,18 +51,34 @@ export interface LaunchProvider {
     }[]
   >;
   prepareDeployment(input: {
-    uid: string;
+    tokenId: number;
     fundingWallet: string;
     metadataUri: string;
     name: string;
     symbol: string;
     devBuyLamports: number;
-  }): Promise<{ intent: string }>;
+    mintSignerRef: string | null;
+  }): Promise<{ intent: string; mintSignerRef: string }>;
   executeDeployment(intent: string): Promise<{
-    status: "pending" | "confirmed";
+    status: "pending" | "confirmed" | "expired";
     signature: string;
     mint: string;
   }>;
+  /** Must prove the old transaction cannot execute before signing a replacement. */
+  refreshDeployment?(intent: string): Promise<string>;
+}
+
+/** Private launch-status handle: unguessable while the CA is secret, and
+ * public-safe once the token is live (everything is public by then). */
+export function launchHandle(mint: string): string {
+  return createHash("sha256").update(`launchseeds-launch:${mint}`).digest("hex").slice(0, 32);
+}
+
+/** Wallets of a prepared launch; only `preparing` launches lack them. */
+function preparedWallets(token: Token) {
+  if (!token.fundingWallet || !token.rewardWallet)
+    throw new Error("Launch is not prepared");
+  return { fundingWallet: token.fundingWallet, rewardWallet: token.rewardWallet };
 }
 
 export class LaunchService {
@@ -57,114 +90,130 @@ export class LaunchService {
   async create(
     raw: LaunchInput,
     capability: string,
-    onCreated?: (uid: string) => void,
+    onCreated?: (tokenId: number) => void,
+    settings: LaunchSettings = DEFAULT_LAUNCH_SETTINGS,
   ) {
     if (!this.provider) throw new Error("Launch service is not configured");
     const input = launchInput.parse({ ...raw, description: DESCRIPTION });
     if (!/^[a-f0-9]{64}$/.test(capability))
       throw new Error("Invalid launch key");
+    const launchSettingsJson = canonicalLaunchSettings(settings);
     const accessHash = hash(capability),
-      requestHash = hash(JSON.stringify(input));
-    const uid = this.store.repo.tx((tx) => {
-      const existing = tx.operations.launchByAccess(accessHash);
-      if (existing) {
-        if (existing.requestHash !== requestHash)
-          throw new Error("Launch key already used for another request");
-        return existing.uid;
-      }
-      const uid = crypto.randomUUID();
-      tx.operations.insertLaunch({
-        uid,
-        accessHash,
-        requestHash,
-        inputJson: JSON.stringify(input),
-        createdAt: Date.now(),
+      requestHash = hash(JSON.stringify({ input, settingsJson: launchSettingsJson }));
+    const existingId = this.existing(accessHash, requestHash);
+    let tokenId = existingId;
+    if (tokenId === null) {
+      // A lost race leaves only an unused, unfunded mint key behind.
+      const mint = this.provider.createMint();
+      tokenId = this.store.repo.tx((tx) => {
+        const raced = tx.tokens.getByAccess(accessHash);
+        if (raced) {
+          if (raced.requestHash !== requestHash)
+            throw new Error("Launch key already used for another request");
+          return raced.id;
+        }
+        return tx.tokens.insert({
+          handle: launchHandle(mint.mint),
+          mint: null,
+          mintSignerRef: mint.mintSignerRef,
+          name: input.name,
+          symbol: input.symbol,
+          description: input.description,
+          image: input.image,
+          metadataUri: null,
+          website: input.website,
+          x: input.x,
+          telegram: input.telegram,
+          fundingWallet: null,
+          fundingWalletName: null,
+          creatorWallet: null,
+          rewardWallet: null,
+          launcherWallet: null,
+          devBuyRecipient: null,
+          refundWallet: null,
+          launchSettingsJson,
+          status: "preparing",
+          deploySignature: null,
+          feeConfigSignature: null,
+          error: null,
+          activeStrategyId: null,
+          leaderStrategyId: null,
+          leaderSince: null,
+          lastGravityMinute: null,
+          createdAt: Date.now(),
+          launchedAt: null,
+          accessHash,
+          requestHash,
+          inputJson: JSON.stringify(input),
+        });
       });
-      return uid;
-    });
-    // Persist strategy before publishing a funding destination. Also valid before a token exists.
-    onCreated?.(uid);
-    await this.resumePreparation(uid);
-    return this.status(uid, capability);
+    }
+    // Persist strategy before publishing a funding destination.
+    onCreated?.(tokenId);
+    await this.resumePreparation(tokenId);
+    return this.statusById(tokenId);
   }
-  async resumePreparation(uid: string, now = Date.now()) {
-    if (!this.provider || this.store.repo.tokens.get(uid)) return false;
+  private existing(accessHash: string, requestHash: string): number | null {
+    const existing = this.store.repo.tokens.getByAccess(accessHash);
+    if (!existing) return null;
+    if (existing.requestHash !== requestHash)
+      throw new Error("Launch key already used for another request");
+    return existing.id;
+  }
+  async resumePreparation(tokenId: number, now = Date.now()) {
+    if (!this.provider) return false;
     const leaseId = crypto.randomUUID();
     const claimed = this.store.repo.tx((tx) => {
-      const r = tx.operations.launch(uid);
-      if (!r || r.leaseUntil > now) return false;
-      tx.operations.updateLaunch(uid, {
+      const t = tx.tokens.get(tokenId);
+      if (!t || t.status !== "preparing" || t.leaseUntil > now) return false;
+      tx.tokens.updateLaunch(tokenId, {
         leaseId,
         leaseUntil: now + LaunchService.PREPARATION_LEASE_MS,
-        attempts: r.attempts + 1,
-        error: "",
+        attempts: t.attempts + 1,
+        error: null,
       });
-      return r;
+      return t;
     });
     if (!claimed) return false;
     const input = launchInput.parse(JSON.parse(claimed.inputJson));
     try {
       const devBuyLamports = solToLamports(input.devBuySol);
       const prepared = await this.provider.prepare({
-        uid,
+        tokenId,
         ...input,
         devBuyLamports,
+        fundingWalletName: claimed.fundingWalletName,
+        mintSignerRef: claimed.mintSignerRef,
       });
       safeInteger(prepared.requiredLamports);
       if (prepared.requiredLamports <= devBuyLamports || !prepared.metadataUri)
         throw new Error("Invalid launch preparation");
       return this.store.repo.tx((tx) => {
-        const r = tx.operations.launch(uid);
-        if (!r || r.leaseId !== leaseId || tx.tokens.get(uid)) return false;
-        const state = tx.operations.state(uid);
+        const t = tx.tokens.get(tokenId);
+        if (!t || t.leaseId !== leaseId || t.status !== "preparing") return false;
+        const state = tx.operations.state(tokenId);
         if (!state) throw new Error("Initial strategy missing");
-        tx.tokens.insert({
-          uid,
-          mint: null,
-          mintSignerRef: null,
-          name: input.name,
-          symbol: input.symbol,
-          description: input.description,
-          image: input.image,
-          website: input.website,
-          x: input.x,
-          telegram: input.telegram,
-          metadataUri: prepared.metadataUri,
+        return tx.tokens.markPrepared(tokenId, {
           fundingWallet: prepared.fundingWallet,
-          fundingWalletName: `launchseeds-${uid}`,
+          fundingWalletName: prepared.fundingWalletName,
           creatorWallet: prepared.rewardWallet,
           rewardWallet: prepared.rewardWallet,
-          launcherWallet: null,
-          devBuyRecipient: null,
-          refundWallet: null,
+          mintSignerRef: prepared.mintSignerRef,
+          metadataUri: prepared.metadataUri,
           requiredLamports: String(prepared.requiredLamports),
           devBuyLamports: String(devBuyLamports),
           quoteExpiresAt: now + 30 * 60_000,
-          fundingReceivedLamports: "0",
-          status: "funding",
-          deploySignature: null,
-          feeConfigSignature: null,
-          nextAttemptAt: 0,
-          error: null,
           activeStrategyId: state.initialStrategyId,
-          leaderStrategyId: null,
-          leaderSince: null,
-          tokenDecimals: 6,
-          priceUsd: 0,
-          marketCapUsd: 0,
-          lastGravityMinute: null,
-          holdersSnapshotSlot: 0,
-          createdAt: claimed.createdAt,
-          launchedAt: null,
+          leaseId: "",
+          leaseUntil: 0,
+          error: null,
         });
-        tx.operations.updateLaunch(uid, { leaseId: "", leaseUntil: 0 });
-        return true;
       });
     } catch (error) {
       this.store.repo.tx((tx) => {
-        const current = tx.operations.launch(uid);
+        const current = tx.tokens.get(tokenId);
         if (current?.leaseId === leaseId)
-          tx.operations.updateLaunch(uid, {
+          tx.tokens.updateLaunch(tokenId, {
             leaseId: "",
             leaseUntil: 0,
             error:
@@ -176,47 +225,166 @@ export class LaunchService {
       throw error;
     }
   }
-  status(uid: string, capability: string) {
-    if (this.store.repo.operations.launch(uid)?.accessHash !== hash(capability))
-      throw new Error("Not found");
-    return this.publicStatus(uid);
+  /**
+   * Amend an unconfirmed, nonfunded launch without changing the recipient
+   * address. A lease excludes the worker while metadata is re-pinned.
+   * Both finalized on-chain deposits and recorded deposits are checked;
+   * an address is never rotated or silently orphaned.
+   */
+  async amend(
+    handle: string,
+    raw: LaunchInput,
+    capability: string,
+    settings: LaunchSettings,
+    firstStrategy: StrategyConfigValue,
+  ) {
+    if (!this.provider || !/^[a-f0-9]{64}$/.test(capability))
+      throw new ApiError("Invalid launch amendment", 401);
+    const input = launchInput.parse({ ...raw, description: DESCRIPTION });
+    const launchSettingsJson = canonicalLaunchSettings(settings);
+    const leaseId = crypto.randomUUID();
+    const now = Date.now();
+    const token = this.store.repo.tx((tx) => {
+      const token = tx.tokens.getByHandle(handle);
+      if (!token || token.accessHash !== hash(capability))
+        throw new Error("Not found");
+      if (tx.freeLaunches.byToken(token.id))
+        throw new ApiError("A sponsorship payment is already prepared. Token details are locked.", 409);
+      if (token.status !== "funding" ||
+          token.fundingReceivedLamports !== "0" ||
+          tx.deposits.sumLamports(token.id) !== 0n)
+        throw new ApiError("This launch is already funded or being deployed", 409);
+      if (token.leaseUntil > now)
+        throw new ApiError("Another launch operation is in progress", 409);
+      tx.tokens.updateLaunch(token.id, {
+        leaseId, leaseUntil: now + LaunchService.PREPARATION_LEASE_MS,
+      });
+      return token;
+    });
+    const tokenId = token.id;
+    const wallets = preparedWallets(token);
+    try {
+      const verifyUnfunded = async () => {
+        if (this.provider!.hasIncomingFunds &&
+            await this.provider!.hasIncomingFunds(wallets.fundingWallet)) {
+          throw new ApiError("A payment is already arriving. Token details are locked.", 409);
+        }
+        const deposits = await this.provider!.deposits(tokenId, wallets.fundingWallet);
+        if (deposits.some((deposit) => deposit.lamports > 0))
+          throw new ApiError("A payment has been detected. Token details are now locked.", 409);
+      };
+      await verifyUnfunded();
+      const devBuyLamports = solToLamports(input.devBuySol);
+      const prepared = await this.provider.prepare({
+        tokenId, ...input, devBuyLamports, refreshMetadata: true,
+        fundingWalletName: token.fundingWalletName,
+        mintSignerRef: token.mintSignerRef,
+      });
+      if (prepared.fundingWallet !== wallets.fundingWallet ||
+          prepared.rewardWallet !== wallets.rewardWallet ||
+          prepared.requiredLamports <= devBuyLamports ||
+          !prepared.metadataUri)
+        throw new ApiError("Revised launch quote changed wallet identity or lacks metadata", 503);
+      await verifyUnfunded();
+      const { config, configKey, configJson } = canonicalStrategy(firstStrategy);
+      this.store.repo.tx((tx) => {
+        const current = tx.tokens.get(tokenId);
+        if (!current || current.leaseId !== leaseId ||
+            current.status !== "funding" ||
+            current.fundingReceivedLamports !== "0" ||
+            tx.deposits.sumLamports(tokenId) !== 0n)
+          throw new ApiError("Launch changed during amendment", 409);
+        const state = tx.operations.state(tokenId);
+        if (!state) throw new Error("Initial strategy missing");
+        const initial = tx.strategies.getOrCreate({
+          tokenId, type: config.type,
+          configKey, configJson, enabled: true, createdAt: Date.now(),
+        });
+        tx.operations.updateState(tokenId, {
+          initialStrategyId: initial.id, switchedAt: Date.now(),
+        });
+        tx.tokens.setGovernance(tokenId, {
+          activeStrategyId: initial.id, leaderStrategyId: null, leaderSince: null,
+        });
+        tx.tokens.updateUnfundedDetails(tokenId, {
+          name: input.name, symbol: input.symbol, description: input.description,
+          image: input.image, website: input.website,
+          x: input.x || "", telegram: input.telegram || "",
+          metadataUri: prepared.metadataUri,
+          requiredLamports: String(prepared.requiredLamports),
+          devBuyLamports: String(devBuyLamports),
+          launchSettingsJson,
+          // A revised quote gets a fresh 30-minute window, like a new one.
+          quoteExpiresAt: Date.now() + 30 * 60_000,
+        });
+        tx.tokens.updateLaunch(tokenId, {
+          inputJson: JSON.stringify(input),
+          requestHash: hash(JSON.stringify({ input, settingsJson: launchSettingsJson })),
+          leaseId: "", leaseUntil: 0, error: null,
+        });
+      });
+      return this.statusById(tokenId);
+    } finally {
+      this.store.repo.tx((tx) => {
+        const current = tx.tokens.get(tokenId);
+        if (current?.leaseId === leaseId)
+          tx.tokens.updateLaunch(tokenId, { leaseId: "", leaseUntil: 0 });
+      });
+    }
   }
-  publicStatus(uid: string) {
-    const request = this.store.repo.operations.launch(uid);
-    const token = this.store.repo.tokens.get(uid);
-    if (!request && !token) throw new Error("Not found");
-    const input = request
-      ? launchInput.parse(JSON.parse(request.inputJson))
-      : token!;
+
+  status(handle: string, capability: string) {
+    const token = this.store.repo.tokens.getByHandle(handle);
+    if (!token || token.accessHash !== hash(capability)) throw new Error("Not found");
+    return this.statusById(token.id);
+  }
+  /** Read-only launch progress addressed by the private handle. */
+  publicStatus(handle: string) {
+    const token = this.store.repo.tokens.getByHandle(handle);
+    if (!token) throw new Error("Not found");
+    return this.statusById(token.id);
+  }
+  private statusById(tokenId: number) {
+    const token = this.store.repo.tokens.get(tokenId);
+    if (!token) throw new Error("Not found");
+    const live = token.status === "live";
     return {
-      uid,
-      status: token?.status || "preparing",
-      name: input.name,
-      symbol: input.symbol,
-      fundingWallet: token?.fundingWallet || "",
-      requiredLamports: token ? safeNumber(token.requiredLamports) : 0,
-      receivedLamports: token ? safeNumber(token.fundingReceivedLamports) : 0,
-      mint: token?.mint || "",
-      launchSignature: token?.deploySignature || "",
-      error:
-        request?.error || token?.error
-          ? "Launch needs operator attention. Do not send more funds."
-          : "",
+      handle: token.handle,
+      status: token.status,
+      name: token.name,
+      symbol: token.symbol,
+      fundingWallet: token.fundingWallet || "",
+      requiredLamports: safeNumber(token.requiredLamports),
+      receivedLamports: safeNumber(token.fundingReceivedLamports),
+      // The CA is only published once the token is live.
+      mint: live ? token.mint || "" : "",
+      launchSignature: token.deploySignature || "",
+      settings: storedLaunchSettings(token.launchSettingsJson),
+      // Funding address and amount are valid until this time (countdown on the pay step).
+      expiresAt: token.quoteExpiresAt,
+      devBuyLamports: safeNumber(token.devBuyLamports),
+      rewardFundVerified: Boolean(live && token.rewardWallet &&
+        BigInt(token.devBuyLamports) > 0n &&
+        BigInt(this.store.repo.holders.get(tokenId, token.rewardWallet)?.balanceRaw ?? "0") > 0n),
+      error: token.error
+        ? "Launch needs operator attention. Do not send more funds."
+        : "",
     };
   }
-  async process(uid: string) {
+  async process(tokenId: number) {
     if (!this.provider) throw new Error("Launch service is not configured");
-    let token = this.store.repo.tokens.get(uid);
+    let token = this.store.repo.tokens.get(tokenId);
     if (!token) throw new Error("Not found");
+    if (token.leaseUntil > Date.now()) return;
     if (!["funding", "deploying"].includes(token.status)) return;
     if (token.status === "funding") {
-      const deposits = await this.provider.deposits(uid, token.fundingWallet);
+      const { fundingWallet } = preparedWallets(token);
+      const deposits = await this.provider.deposits(tokenId, fundingWallet);
       this.store.repo.tx((tx) => {
         for (const d of deposits) {
           safeInteger(d.lamports);
           tx.deposits.record({
-            uid: crypto.randomUUID(),
-            tokenId: uid,
+            tokenId,
             signature: d.signature,
             lamports: String(d.lamports),
             confirmedSlot: d.confirmedSlot,
@@ -224,35 +392,50 @@ export class LaunchService {
             refundSignature: null,
           });
         }
-        tx.tokens.update(uid, {
-          fundingReceivedLamports: tx.deposits.sumLamports(uid).toString(),
+        tx.tokens.update(tokenId, {
+          fundingReceivedLamports: tx.deposits.sumLamports(tokenId).toString(),
         });
       });
-      token = this.store.repo.tokens.get(uid)!;
+      token = this.store.repo.tokens.get(tokenId)!;
       if (
         BigInt(token.fundingReceivedLamports) < BigInt(token.requiredLamports)
       )
         return;
       const prepared = await this.provider.prepareDeployment({
-        uid,
-        fundingWallet: token.fundingWallet,
+        tokenId,
+        fundingWallet,
         metadataUri: token.metadataUri!,
         name: token.name,
         symbol: token.symbol,
         devBuyLamports: safeNumber(token.devBuyLamports),
+        mintSignerRef: token.mintSignerRef,
       });
       this.store.repo.tx((tx) => {
-        const current = tx.tokens.get(uid)!;
+        const current = tx.tokens.get(tokenId)!;
         if (current.status !== "funding") return;
-        tx.operations.updateLaunch(uid, { intent: prepared.intent });
-        tx.tokens.transition(uid, "funding", "deploying");
+        tx.tokens.updateLaunch(tokenId, { intent: prepared.intent });
+        tx.tokens.update(tokenId, { mintSignerRef: prepared.mintSignerRef });
+        tx.tokens.transition(tokenId, "funding", "deploying");
       });
     }
-    const intent = this.store.repo.operations.launch(uid)?.intent;
+    const intent = this.store.repo.tokens.get(tokenId)?.intent;
     if (!intent) throw new Error("Missing persisted launch intent");
-    const result = await this.provider.executeDeployment(intent);
+    let result = await this.provider.executeDeployment(intent);
+    if (result.status === "expired") {
+      if (!this.provider.refreshDeployment)
+        throw new Error("Launch intent expired; reconciliation required");
+      const replacement = await this.provider.refreshDeployment(intent);
+      const stored = this.store.repo.tx((tx) => {
+        const current = tx.tokens.get(tokenId);
+        if (current?.status !== "deploying" || current.intent !== intent) return false;
+        tx.tokens.updateLaunch(tokenId, { intent: replacement, error: null });
+        return true;
+      });
+      if (!stored) return;
+      result = await this.provider.executeDeployment(replacement);
+    }
     if (result.status === "confirmed")
-      this.store.repo.tokens.transition(uid, "deploying", "live", {
+      this.store.repo.tokens.transition(tokenId, "deploying", "live", {
         mint: result.mint,
         deploySignature: result.signature,
         launchedAt: Date.now(),

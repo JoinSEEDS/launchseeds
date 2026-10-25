@@ -1,7 +1,6 @@
 import { render } from "tradjs/client";
 import type {
   ProcessSummary,
-  StreamKind,
   AdminAction,
 } from "../../lib/admin/bgrun";
 
@@ -67,7 +66,8 @@ export default function mount() {
   const detailStatus = get<HTMLElement>("#admin-selected-status");
   const actions = get<HTMLElement>("#admin-actions");
   const logSearch = get<HTMLInputElement>("#admin-log-search");
-  const logOutput = get<HTMLElement>("#admin-log-output");
+  const stdoutOutput = get<HTMLElement>("#admin-log-stdout");
+  const stderrOutput = get<HTMLElement>("#admin-log-stderr");
   const streamStatus = get<HTMLElement>("#admin-stream-status");
   const follow = get<HTMLInputElement>("#admin-follow");
   const pause = get<HTMLButtonElement>("#admin-pause");
@@ -79,7 +79,6 @@ export default function mount() {
 
   let processes: ProcessSummary[] = [];
   let selected = "";
-  let logKind: StreamKind = "both";
   let latest: LogSnapshot = { stdout: "", stderr: "", checkedAt: 0 };
   let es: EventSource | null = null;
   let auth = false;
@@ -288,25 +287,25 @@ export default function mount() {
 
   function displayLogs() {
     const query = logSearch.value.trim().toLowerCase();
-    const output =
-      logKind === "stdout"
-        ? latest.stdout
-        : logKind === "stderr"
-          ? latest.stderr
-          : `${latest.stdout ? "— stdout —\n" + latest.stdout : ""}${latest.stderr ? "\n— stderr —\n" + latest.stderr : ""}`;
-    const visible = query
-      ? output
-          .split("\n")
-          .filter((line) => line.toLowerCase().includes(query))
-          .join("\n")
-      : output;
-    // textContent is essential: log output is untrusted text, never HTML.
-    logOutput.textContent =
-      visible ||
-      (selected
-        ? "No matching log lines."
-        : "Select a process to view its logs.");
-    if (follow.checked) logOutput.scrollTop = logOutput.scrollHeight;
+    const show = (target: HTMLElement, output: string) => {
+      const visible = query
+        ? output
+            .split("\n")
+            .filter((line) => line.toLowerCase().includes(query))
+            .join("\n")
+        : output;
+      // textContent is essential: log output is untrusted text, never HTML.
+      target.textContent =
+        visible ||
+        (!selected
+          ? "Select a process to view its logs."
+          : query
+            ? "No matching log lines."
+            : "No output.");
+      if (follow.checked) target.scrollTop = target.scrollHeight;
+    };
+    show(stdoutOutput, latest.stdout);
+    show(stderrOutput, latest.stderr);
   }
 
   function startStream() {
@@ -316,7 +315,7 @@ export default function mount() {
     if (!auth || !selected) return;
     const id = sequence;
     const source = new EventSource(
-      `/api/admin/stream?name=${encodeURIComponent(selected)}&stream=${logKind}`,
+      `/api/admin/stream?name=${encodeURIComponent(selected)}&stream=both`,
       { withCredentials: true },
     );
     es = source;
@@ -362,23 +361,6 @@ export default function mount() {
     );
     if (button?.dataset.processName) selectProcess(button.dataset.processName);
   };
-  const updateKind = (event: MouseEvent) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
-      "[data-log-kind]",
-    );
-    const kind = button?.dataset.logKind;
-    if (kind !== "both" && kind !== "stdout" && kind !== "stderr") return;
-    logKind = kind;
-    for (const item of page.querySelectorAll<HTMLButtonElement>(
-      "[data-log-kind]",
-    )) {
-      const active = item === button;
-      item.setAttribute("aria-selected", String(active));
-      item.tabIndex = active ? 0 : -1;
-    }
-    startStream();
-  };
-
   const execute = async (event: MouseEvent) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
       "[data-admin-action]",
@@ -464,9 +446,6 @@ export default function mount() {
   processFilter.addEventListener("input", renderRows);
   refresh.addEventListener("click", () => void refreshProcesses());
   actions.addEventListener("click", execute);
-  page
-    .querySelector<HTMLElement>(".admin__log-controls .tabs")
-    ?.addEventListener("click", updateKind);
   logSearch.addEventListener("input", displayLogs);
   pause.addEventListener("click", togglePause);
 

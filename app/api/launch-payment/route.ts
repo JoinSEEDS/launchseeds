@@ -7,17 +7,15 @@ import {
   ApiError,
   apiJson,
   readBoundedJson,
-  requireSameOrigin,
-} from "../../../lib/api-security";
+  requireSameOrigin, LAUNCH_HANDLE } from "../../../lib/api-security";
 import { getLaunchService } from "../../../src/server/runtime";
 import { getOperationalLaunchReadiness } from "../../../src/server/launch-health";
 import { publicRouteError } from "../../../src/server/route-errors";
 import { IngressRateLimiter } from "../../../lib/trusted-client";
 
-const limiter = new IngressRateLimiter("launch-payment", 15, 60_000);
+const limiter = new IngressRateLimiter("launch-payment", 10, 60_000);
 const walletPattern = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const uidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 
 /**
  * Generate an unsigned SOL funding transfer, bound to one launch and payer.
@@ -33,13 +31,13 @@ export async function POST(request: Request): Promise<Response> {
     const readiness = await getOperationalLaunchReadiness();
     if (!readiness.enabled)
       throw new ApiError("Token launches are not available at this time.", 503);
-    const { uid, wallet } = await readBoundedJson<{
-      uid?: unknown;
+    const { handle, wallet } = await readBoundedJson<{
+      handle?: unknown;
       wallet?: unknown;
     }>(request, 2048);
     if (
-      typeof uid !== "string" ||
-      !uidPattern.test(uid) ||
+      typeof handle !== "string" ||
+      !LAUNCH_HANDLE.test(handle) ||
       typeof wallet !== "string" ||
       !walletPattern.test(wallet)
     )
@@ -51,7 +49,7 @@ export async function POST(request: Request): Promise<Response> {
     const service = await getLaunchService();
     let status;
     try {
-      status = service.status(uid, capability);
+      status = service.status(handle, capability);
     } catch {
       throw new ApiError("Launch not found.", 404);
     }

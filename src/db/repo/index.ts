@@ -3,6 +3,7 @@
  * All methods are synchronous. Never await HTTP/RPC within tx().
  */
 import type { LaunchseedsDatabase } from "../connection";
+import { operationsRepo } from "./operations";
 import { tokenRepo } from "./tokens";
 import { depositRepo } from "./deposits";
 import { holderRepo } from "./holders";
@@ -16,10 +17,12 @@ import { executionRepo } from "./executions";
 import { packRepo } from "./packs";
 import { cardRepo } from "./cards";
 import { tokenBuybackRepo } from "./token-buybacks";
+import { freeLaunchRepo } from "./free-launches";
 import { readRepo } from "./reads";
 
 export function createRepo(db: LaunchseedsDatabase) {
   const r = {
+    operations: operationsRepo(db),
     tokens: tokenRepo(db),
     deposits: depositRepo(db),
     holders: holderRepo(db),
@@ -33,13 +36,17 @@ export function createRepo(db: LaunchseedsDatabase) {
     packs: packRepo(db),
     cards: cardRepo(db),
     tokenBuybacks: tokenBuybackRepo(db),
+    freeLaunches: freeLaunchRepo(db),
   };
   return {
     ...r,
     reads: readRepo(db, r),
     /** BEGIN IMMEDIATE (sqlite-zod-orm default), automatic rollback on throw. */
     tx<T>(fn: (tx: typeof r) => T): T {
-      return db.transaction(() => fn(r));
+      if (fn.constructor.name === "AsyncFunction") throw new Error("Repository transactions must be synchronous");
+      return db.transaction(() => { const result = fn(r);
+        if (result && typeof (result as {then?:unknown}).then === "function") throw new Error("Repository transactions must be synchronous");
+        return result; });
     },
   };
 }

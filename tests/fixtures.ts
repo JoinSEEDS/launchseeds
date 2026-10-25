@@ -1,10 +1,15 @@
-import type { Token } from "../src/db/schema";
+import type { NewRows, Token } from "../src/db/schema";
 import { schemas } from "../src/db/schema";
 import type { Store } from "../src/server/store";
 export const WALLET = "11111111111111111111111111111111";
-export function tokenFixture(patch: Partial<Token> = {}): Token {
+const hex = (bytes: number) =>
+  Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+/** A token insert payload (no id); insert it with `store.repo.tokens.insert`. */
+export function tokenFixture(patch: Partial<NewRows["tokens"]> = {}): NewRows["tokens"] {
   return schemas.tokens.parse({
-    uid: crypto.randomUUID(),
+    handle: hex(16),
     mint: null,
     mintSignerRef: null,
     name: "Example",
@@ -32,18 +37,25 @@ export function tokenFixture(patch: Partial<Token> = {}): Token {
     lastGravityMinute: null,
     createdAt: Date.now(),
     launchedAt: Date.now(),
+    accessHash: hex(32),
+    requestHash: hex(32),
+    inputJson: "{}",
     ...patch,
   });
 }
+/** Inserts a fixture token and returns the stored row (with its id). */
+export function insertToken(store: Store, patch: Partial<NewRows["tokens"]> = {}): Token {
+  const id = store.repo.tokens.insert(tokenFixture(patch));
+  return store.repo.tokens.get(id)!;
+}
 export function seedHolder(
   store: Store,
-  tokenId: string,
+  tokenId: number,
   wallet = WALLET,
   balanceRaw = "25000000",
   gravityMicros = "100000000",
 ) {
   store.data.database.holders.insert({
-    uid: crypto.randomUUID(),
     tokenId,
     wallet,
     balanceRaw,

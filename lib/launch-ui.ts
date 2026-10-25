@@ -1,3 +1,6 @@
+import type { LaunchSettings } from "../src/domain/launch-settings";
+import { MAX_TOKEN_IMAGE_BYTES, TOKEN_IMAGE_SIZE_ERROR } from "./media-policy";
+import { validTelegram, normalizeX } from "./launch-socials";
 import { DESCRIPTION, type Strategy } from "./strategy";
 
 /** Public statuses exposed by the canonical launch service. */
@@ -5,7 +8,8 @@ export type LaunchPhase =
   "preparing" | "funding" | "deploying" | "live" | "failed";
 
 export interface PublicLaunchStatus {
-  uid: string;
+  /** Private launch-status handle (not a database id). */
+  handle: string;
   status: LaunchPhase;
   name: string;
   symbol: string;
@@ -15,6 +19,11 @@ export interface PublicLaunchStatus {
   mint: string;
   launchSignature: string;
   error: string;
+  devBuyLamports?: number;
+  rewardFundVerified?: boolean;
+  settings?: LaunchSettings;
+  /** Quote expiry (ms); the funding address is valid until then. */
+  expiresAt?: number;
 }
 
 export interface LaunchFormFields {
@@ -26,6 +35,7 @@ export interface LaunchFormFields {
   telegram: string;
   image: string;
   firstStrategy: Strategy;
+  settings: LaunchSettings;
 }
 
 export interface LaunchView {
@@ -43,8 +53,9 @@ export interface LaunchView {
 }
 
 const walletAddress = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const uidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** sha256(CA) prefix, or a pre-2026-10-25 launch id. */
+const handlePattern =
+  /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 /**
  * On failed or preparing launches, do not expose a stale address or invite
@@ -136,7 +147,7 @@ export function validateImage(file: File | null): string | null {
     return "Use a PNG, JPEG, GIF or WebP token image.";
   }
   if (file.size <= 0) return "The image file is empty.";
-  if (file.size > 550_000) return "Token images must be smaller than 550 KB.";
+  if (file.size > MAX_TOKEN_IMAGE_BYTES) return TOKEN_IMAGE_SIZE_ERROR;
   return null;
 }
 
@@ -149,21 +160,16 @@ export function validateLaunchFields(fields: LaunchFormFields): string | null {
     return "Use 1–10 letters or digits for the ticker.";
   }
   if (parseSol(fields.devBuySol) === null) {
-    return "Enter a valid dev buy in SOL, with up to nine decimals.";
+    return "Enter a valid initial reward fund amount in SOL, with up to nine decimals.";
   }
-  if (fields.website && !/^https:\/\/[^\s]+$/i.test(fields.website)) {
+  if (fields.website.trim() && !/^https:\/\/[^\s]+$/i.test(fields.website.trim())) {
     return "Website must begin with https://.";
   }
-  if (fields.x && !/^@?[A-Za-z0-9_]{1,15}$/.test(fields.x)) {
+  if (fields.x.trim() && !/^@?[A-Za-z0-9_]{1,15}$/.test(normalizeX(fields.x))) {
     return "Enter a valid X handle.";
   }
-  if (
-    fields.telegram &&
-    !/^(?:https:\/\/t\.me\/|t\.me\/|@)?[A-Za-z0-9_]{5,32}$/.test(
-      fields.telegram,
-    )
-  ) {
-    return "Enter a valid Telegram handle.";
+  if (!validTelegram(fields.telegram)) {
+    return "Enter a Telegram handle or t.me link, or leave it blank.";
   }
   if (!fields.firstStrategy) return "Choose a starting strategy.";
   return null;
@@ -176,20 +182,22 @@ export function buildLaunchPayload(fields: LaunchFormFields) {
     description: DESCRIPTION,
     image: fields.image,
     website: fields.website.trim(),
-    x: fields.x.trim(),
+    x: normalizeX(fields.x),
     telegram: fields.telegram.trim(),
     devBuySol: fields.devBuySol,
     firstStrategy: fields.firstStrategy,
+    settings: fields.settings,
   };
 }
 
 /** The public launch URL identifies a read-only operation, not a capability. */
-export function launchUrl(uid: string): string | null {
-  return uidPattern.test(uid) ? `/launch?uid=${encodeURIComponent(uid)}` : null;
+export function launchUrl(handle: string): string | null {
+  return handlePattern.test(handle) ? `/launch?launch=${encodeURIComponent(handle)}` : null;
 }
 
-export function publicTokenUrl(uid: string): string | null {
-  return uidPattern.test(uid) ? `/token/${encodeURIComponent(uid)}` : null;
+/** Token pages are addressed by CA, which only exists once the token is live. */
+export function publicTokenUrl(mint: string): string | null {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint) ? `/token/${encodeURIComponent(mint)}` : null;
 }
 
 /** Guard against malformed responses from reverse proxies or failed migrations. */
@@ -204,8 +212,8 @@ export function validLaunchStatus(value: unknown): value is PublicLaunchStatus {
     "failed",
   ];
   return (
-    typeof data.uid === "string" &&
-    uidPattern.test(data.uid) &&
+    typeof data.handle === "string" &&
+    handlePattern.test(data.handle) &&
     phases.includes(data.status as LaunchPhase) &&
     typeof data.name === "string" &&
     typeof data.symbol === "string" &&

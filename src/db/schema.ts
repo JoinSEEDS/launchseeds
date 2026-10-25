@@ -1,6 +1,7 @@
-/** Launchseeds authoritative persisted types. sqlite-zod-orm adds its own integer `id` column;
- * our cross-table identities are the unique TEXT `uid` fields. All currency/chain amounts
- * are atomic decimal strings. Time fields are UTC milliseconds unless named `Minute`.
+/** Launchseeds authoritative persisted types. sqlite-zod-orm adds its own integer `id` column,
+ * which is every row's identity; cross-table references are integer `…Id` columns and are
+ * never exposed publicly (tokens are addressed by CA). All currency/chain amounts are
+ * atomic decimal strings. Time fields are UTC milliseconds unless named `Minute`.
  */
 import { z } from "sqlite-zod-orm";
 
@@ -9,6 +10,8 @@ export const SignedAtomic = z.string().regex(/^(0|-?[1-9][0-9]*)$/);
 export const Time = z.number().int().nonnegative();
 export const Slot = Time;
 export const Id = z.string().min(1);
+/** Integer row reference (sqlite-zod-orm `id`). */
+export const RowId = z.number().int().positive();
 export const Address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
 export const OptionalAddress = Address.nullable();
 
@@ -85,7 +88,8 @@ export const Asset = z.enum(["SOL", "USDC", "TOKEN"]);
 
 export const schemas = {
   tokens: z.object({
-    uid: Id,
+    /** Private launch-status handle: sha256(CA) prefix; legacy launches keep their old id. */
+    handle: Id,
     mint: OptionalAddress,
     mintSignerRef: z.string().nullable(),
     name: z.string().min(1).max(32),
@@ -96,24 +100,26 @@ export const schemas = {
     website: z.string().default(""),
     x: z.string().default(""),
     telegram: z.string().default(""),
-    fundingWallet: Address,
-    fundingWalletName: Id,
-    creatorWallet: Address,
-    rewardWallet: Address,
+    /** Null while the launch is `preparing` (before wallets and metadata exist). */
+    fundingWallet: OptionalAddress,
+    fundingWalletName: z.string().nullable(),
+    creatorWallet: OptionalAddress,
+    rewardWallet: OptionalAddress,
     launcherWallet: OptionalAddress,
     devBuyRecipient: OptionalAddress,
     refundWallet: OptionalAddress,
-    requiredLamports: Atomic,
-    devBuyLamports: Atomic,
-    quoteExpiresAt: Time,
+    requiredLamports: Atomic.default("0"),
+    devBuyLamports: Atomic.default("0"),
+    launchSettingsJson: z.string().default(""),
+    quoteExpiresAt: Time.default(0),
     fundingReceivedLamports: Atomic.default("0"),
     status: LaunchStatus,
     deploySignature: z.string().nullable(),
     feeConfigSignature: z.string().nullable(),
     nextAttemptAt: Time.default(0),
     error: z.string().nullable(),
-    activeStrategyId: z.string().nullable(),
-    leaderStrategyId: z.string().nullable(),
+    activeStrategyId: RowId.nullable(),
+    leaderStrategyId: RowId.nullable(),
     leaderSince: Time.nullable(),
     tokenDecimals: z.number().int().min(0).max(18).default(6),
     priceUsd: z.number().finite().nonnegative().default(0),
@@ -122,10 +128,17 @@ export const schemas = {
     holdersSnapshotSlot: Slot.default(0),
     createdAt: Time,
     launchedAt: Time.nullable(),
+    // Launch request (merged): creator capability hash, idempotent input, preparation lease.
+    accessHash: Id,
+    requestHash: Id,
+    inputJson: z.string(),
+    leaseId: z.string().default(""),
+    leaseUntil: Time.default(0),
+    attempts: Time.default(0),
+    intent: z.string().default(""),
   }),
   deposits: z.object({
-    uid: Id,
-    tokenId: Id,
+    tokenId: RowId,
     signature: Id,
     lamports: Atomic,
     confirmedSlot: Slot,
@@ -133,8 +146,7 @@ export const schemas = {
     refundSignature: z.string().nullable(),
   }),
   holders: z.object({
-    uid: Id,
-    tokenId: Id,
+    tokenId: RowId,
     wallet: Address,
     balanceRaw: Atomic,
     /** 1 Gravity = 1 USD-dollar-minute; store micro-dollar-minutes. */
@@ -145,8 +157,7 @@ export const schemas = {
     excluded: z.boolean().default(false),
   }),
   strategies: z.object({
-    uid: Id,
-    tokenId: Id,
+    tokenId: RowId,
     type: z.enum(["pack", "stock", "burn", "wallet", "x", "github"]),
     configKey: Id,
     configJson: z.string(),
@@ -154,19 +165,18 @@ export const schemas = {
     createdAt: Time,
   }),
   votes: z.object({
-    uid: Id,
-    tokenId: Id,
+    tokenId: RowId,
     wallet: Address,
-    strategyId: Id,
+    strategyId: RowId,
     /** Strictly increasing per token/wallet; included in signed vote intent. */
     nonce: z.number().int().positive(),
     signature: Id,
     votedAt: Time,
   }),
   treasuries: z.object({
-    uid: Id,
     ownerType: z.enum(["token", "platform"]),
-    ownerId: Id, // token.uid or 'token'
+    /** Owning token; null for the platform ($TOKEN) treasury. */
+    tokenId: RowId.nullable(),
     wallet: Address,
     asset: Asset,
     availableAtomic: Atomic.default("0"),
@@ -174,9 +184,8 @@ export const schemas = {
     updatedAt: Time,
   }),
   ledger: z.object({
-    uid: Id,
     eventId: Id,
-    treasuryId: Id,
+    treasuryId: RowId,
     type: z.enum([
       "fee_in",
       "reserve",
@@ -196,14 +205,13 @@ export const schemas = {
       "token_buyback",
       "adjustment",
     ]),
-    refId: Id,
+    refId: RowId,
     signature: z.string().nullable(),
     createdAt: Time,
   }),
   feeClaims: z.object({
-    uid: Id,
-    tokenId: Id,
-    strategyId: Id,
+    tokenId: RowId,
+    strategyId: RowId,
     strategyConfig: z.string(),
     targetLamports: Atomic,
     estimatedCommunityLamports: Atomic,
@@ -216,20 +224,18 @@ export const schemas = {
     updatedAt: Time,
   }),
   fees: z.object({
-    uid: Id,
-    feeClaimId: Id,
-    tokenId: Id,
-    treasuryId: Id,
+    feeClaimId: RowId,
+    tokenId: RowId,
+    treasuryId: RowId,
     signature: Id,
     receiptIndex: z.number().int().nonnegative(),
     lamports: Atomic,
     receivedAt: Time,
   }),
   executions: z.object({
-    uid: Id,
-    tokenId: Id,
-    fundingClaimId: Id,
-    strategyId: Id,
+    tokenId: RowId,
+    fundingClaimId: RowId,
+    strategyId: RowId,
     strategyConfig: z.string(),
     reservedLamports: Atomic,
     targetUsdCents: z.number().int().nonnegative(),
@@ -248,7 +254,7 @@ export const schemas = {
     fulfilledAt: Time.nullable(),
   }),
   packs: z.object({
-    uid: Id, // Collector Crypt machine ID
+    machineId: Id, // Collector Crypt machine ID
     provider: z.literal("collector_crypt"),
     name: z.string(),
     image: z.string(),
@@ -258,8 +264,7 @@ export const schemas = {
     refreshedAt: Time,
   }),
   cards: z.object({
-    uid: Id,
-    executionId: Id,
+    executionId: RowId,
     nftMint: Address,
     recipient: Address,
     name: z.string(),
@@ -273,8 +278,7 @@ export const schemas = {
     awardedAt: Time,
   }),
   tokenBuybacks: z.object({
-    uid: Id,
-    treasuryId: Id,
+    treasuryId: RowId,
     targetUsdCents: z.number().int().positive().default(50_000),
     reservedLamports: Atomic,
     status: BuybackStatus,
@@ -289,10 +293,26 @@ export const schemas = {
     fundedAt: Time,
     fulfilledAt: Time.nullable(),
   }),
+  /** Launches funded from the free-launch treasury. The signed transfer is stored
+   * before it is sent, so a retry can never build a second one. */
+  freeLaunches: z.object({
+    tokenId: RowId,
+    identity: z.string().min(1),
+    lamports: Atomic,
+    signature: z.string().min(1),
+    transaction: z.string().min(1),
+    lastValidBlockHeight: z.number().int().nonnegative(),
+    createdAt: Time,
+  }),
 } as const;
 
+/** Stored rows: schema fields plus the ORM's integer `id`. */
 export type Tables = {
-  [K in keyof typeof schemas]: z.infer<(typeof schemas)[K]>;
+  [K in keyof typeof schemas]: z.infer<(typeof schemas)[K]> & { id: number };
+};
+/** Insert payloads: schema input (defaults optional), no `id`. */
+export type NewRows = {
+  [K in keyof typeof schemas]: z.input<(typeof schemas)[K]>;
 };
 export type Token = Tables["tokens"];
 export type Deposit = Tables["deposits"];
@@ -307,6 +327,7 @@ export type Execution = Tables["executions"];
 export type Pack = Tables["packs"];
 export type Card = Tables["cards"];
 export type TokenBuyback = Tables["tokenBuybacks"];
+export type FreeLaunch = Tables["freeLaunches"];
 export type StrategyConfigValue = z.infer<typeof StrategyConfig>;
 export type LaunchStatusValue = z.infer<typeof LaunchStatus>;
 export type ExecutionStatusValue = z.infer<typeof ExecutionStatus>;

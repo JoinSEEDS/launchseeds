@@ -1,3 +1,4 @@
+import { storedLaunchSettings, durationText, activeLockUntil, elapsedText } from "../../../src/domain/launch-settings";
 import { getStore } from "../../../src/server/runtime";
 import { strategyBoard } from "../../../lib/governance";
 import { getCatalog } from "../../../src/server/catalog";
@@ -8,17 +9,33 @@ import {
 } from "../../../lib/treasury-readiness";
 import { initials, shortAddress } from "../../../lib/format";
 import { getMintMarketCap } from "../../../src/server/token-market";
+import { unclaimedFeesSoon } from "../../../src/server/creator-fees";
+
+function boardLockUntil(tokenId: number, store: ReturnType<typeof getStore>, settings: ReturnType<typeof storedLaunchSettings>, now: number) {
+  const token = store.repo.tokens.get(tokenId);
+  const state = store.repo.operations.state(tokenId);
+  if (!token || !state) return 0;
+  return activeLockUntil(token, {
+    initialStrategyId: state.initialStrategyId,
+    launchedAt: token.launchedAt ?? now,
+    activatedAt: token.activeStrategyId === state.initialStrategyId ? token.launchedAt ?? now : state.switchedAt,
+    firstLockMs: settings.firstStrategyLockMs,
+    minimumActiveMs: settings.minimumActiveMs,
+  });
+}
 
 export default async function TokenPage({
   params,
 }: {
   params: { id: string };
 }) {
-  const uid = params.id,
-    store = getStore();
+  // The URL carries the token's CA; the internal id never leaves the server.
+  const store = getStore();
+  let tokenId: number;
   let token: ReturnType<typeof store.token>;
   try {
-    token = store.token(uid);
+    tokenId = store.liveTokenId(params.id);
+    token = store.token(tokenId);
   } catch {
     return (
       <main className="page">
@@ -27,17 +44,20 @@ export default async function TokenPage({
       </main>
     );
   }
-  if (token.status !== "live")
-    return (
-      <main className="page">
-        <h1 className="page-title">Launch pending</h1>
-        <p className="page-lede">The launch has not been confirmed yet.</p>
-        <a href={`/launch?uid=${encodeURIComponent(uid)}`} className="btn">
-          View launch status
-        </a>
-      </main>
-    );
-  const board = strategyBoard(uid),
+  const settings = storedLaunchSettings(token.launchSettingsJson);
+  const lockUntil = boardLockUntil(tokenId, store, settings, Date.now());
+  const strategyState = store.repo.operations.state(tokenId);
+  const creatorLocked = token.activeStrategyId === strategyState?.initialStrategyId &&
+    Date.now() < (token.launchedAt ?? 0) + settings.firstStrategyLockMs;
+  // When the current active strategy took over (the first one: at launch).
+  const activeSince = token.activeStrategyId === strategyState?.initialStrategyId
+    ? token.launchedAt ?? Date.now()
+    : strategyState?.switchedAt ?? token.launchedAt ?? Date.now();
+  const lockLeft = lockUntil - Date.now();
+  const lockText = lockLeft <= 0
+    ? "open to takeover"
+    : `${creatorLocked ? "locked for" : "can change in"} ${lockLeft >= 3_600_000 ? `${Math.ceil(lockLeft / 3_600_000)}h` : `${Math.ceil(lockLeft / 60_000)}m`}`;
+  const board = strategyBoard(tokenId),
     catalog = await getCatalog().catch(() => null);
   const active = board?.active;
   const ready = active
@@ -45,7 +65,7 @@ export default async function TokenPage({
         active,
         quoteStrategy(active, catalog, Date.now()),
         {
-          tokenUid: uid,
+          tokenId: tokenId,
           status: "live",
           treasuryAddress: token.rewardWallet,
           collectedMicros: token.collectedMicros,
@@ -64,7 +84,10 @@ export default async function TokenPage({
       ? null
       : ready.quote.costMicros / 1e6;
   const pct = ready?.progressPercent ?? 0;
-  const marketCap = await getMintMarketCap(token.mint, token.priceUsd);
+  const [marketCap, unclaimedFees] = await Promise.all([
+    getMintMarketCap(token.mint, token.priceUsd),
+    unclaimedFeesSoon(token),
+  ]);
   const leaderboard = store.leaderboard(token.id);
   // Public votes may be capped by the governance journal. An absent vote here
   // means unobserved, not necessarily that the holder never voted.
@@ -76,7 +99,7 @@ export default async function TokenPage({
     : "Not configured";
   return (
     <>
-      <main className="page" id="governed-token" data-token-uid={uid}>
+      <main className="page" id="governed-token" data-token-mint={token.mint ?? ""}>
         <div className="page-head">
           <span className="av av--lg" style={{ background: "#2e3b78" }}>
             {token.image ? (
@@ -86,7 +109,20 @@ export default async function TokenPage({
             )}
           </span>
           <div>
-            <h1 className="page-title">${token.symbol} Treasury</h1>
+            <div className="title-row">
+              <h1 className="page-title">${token.symbol}</h1>
+              <span className="addr">
+                <span className="mono">{shortAddress(token.mint)}</span>
+                <button
+                  className="btn-copy"
+                  data-copy={token.mint}
+                  type="button"
+                  aria-label="Copy contract address"
+                >
+                  Copy
+                </button>
+              </span>
+            </div>
             <p className="page-lede">
               Holders vote on what this token's fees do. Each reward is funded
               by its treasury.
@@ -124,25 +160,12 @@ export default async function TokenPage({
           <div className="page-head__stats">
             <div>
               <div className="label label--sm">Market cap</div>
-              <div className="kv__value">{marketCap ?? "—"}</div>
+              <div className="kv__value" data-num="">{marketCap ?? "—"}</div>
             </div>
             <div>
               <div className="label label--sm">Active holders</div>
-              <div className="kv__value">
+              <div className="kv__value" data-num="">
                 {leaderboard.holders.length.toLocaleString()}
-              </div>
-            </div>
-            <div>
-              <div className="label label--sm">CA</div>
-              <div className="kv__value mono">
-                <button
-                  className="btn-copy"
-                  data-copy={token.mint}
-                  type="button"
-                  aria-label="Copy contract address"
-                >
-                  {shortAddress(token.mint)}
-                </button>
               </div>
             </div>
           </div>
@@ -173,27 +196,30 @@ export default async function TokenPage({
             <div>
               <div className="label label--sm">Waiting to pay out</div>
               <div className="treasury__amount">
-                <b id="treasury-available">${available.toFixed(2)}</b>
+                <b id="treasury-available" data-num="">${available.toFixed(2)}</b>
                 <span id="treasury-needed">
                   {cost === null ? "Awaiting price" : `of $${cost.toFixed(2)}`}
                 </span>
               </div>
+              <div className="treasury__fees" id="treasury-fees-row" hidden={unclaimedFees === null}>
+                <span className="label label--sm">Fees accumulated</span>
+                <b id="treasury-fees" data-num="">
+                  ${((unclaimedFees ?? 0) / 1e6).toFixed(2)}
+                </b>
+              </div>
             </div>
             <div className="treasury__rule" aria-hidden="true" />
             <div className="treasury__active">
-              <span
-                className="strat-ic"
-                style={{ "--c": "var(--accent)" } as any}
-              >
-                ↗
-              </span>
               <span>
                 <span className="label label--sm">
-                  Active strategy{" "}
-                  <span className="pill pill--active pill--sm">SELECTED</span>
+                  Active strategy
                 </span>
                 <b id="active-strategy">{title}</b>
-                <small id="next-reward-name">Next: {title}</small>
+                <small className="dim">
+                  <span id="active-since" data-active-since={activeSince}>Active {elapsedText(Date.now() - activeSince)}</span>
+                  {" · "}
+                  <span id="active-lock-text" data-lock-until={lockUntil} data-creator-locked={creatorLocked ? "true" : "false"}>{lockText}</span>
+                </small>
               </span>
             </div>
           </div>
@@ -210,12 +236,11 @@ export default async function TokenPage({
               <i style={{ width: `${pct}%` }} />
             </div>
             <small>
-              <span id="next-reward-deficit">
+              <span id="next-reward-deficit" data-num="">
                 {cost === null
                   ? "Fresh price unavailable"
                   : `$${Math.max(0, cost - available).toFixed(2)} to go`}
               </span>
-              <span>No confirmed rewards</span>
             </small>
             <p
               className="treasury-verification"
@@ -252,28 +277,20 @@ export default async function TokenPage({
               <p id="holder-error" role="status" className="opt-note"></p>
             </section>
 
-            <section className="panel panel__body--roomy">
-              <div className="label">Last reward</div>
-              <p className="cta-text">
-                No confirmed rewards have been recorded.
-              </p>
-            </section>
           </aside>
           <div className="split__main split__main--stack">
             <section
               className="stack stack--tight"
               aria-labelledby="vote-title"
             >
-              <h2 className="section-title" id="vote-title">
-                Strategy Vote
-              </h2>
+              <h2 className="section-title" id="vote-title">Strategy Vote</h2>
               <div className="ledger-bar">
                 <span className="status">
-                  <span className="pill">LIVE</span>
                   <span>
                     <b
                       style={{ color: "var(--text-hi)" }}
                       data-voters=""
+                      data-num=""
                       id="voter-count"
                     >
                       0
@@ -282,6 +299,7 @@ export default async function TokenPage({
                     <b
                       style={{ color: "var(--text-hi)" }}
                       data-turnout=""
+                      data-num=""
                       id="strategy-turnout"
                     >
                       0%
@@ -289,7 +307,7 @@ export default async function TokenPage({
                     of gravity
                   </span>
                 </span>
-                <span className="status"></span>
+                <span className="status">Leader takes over after 3:00 on top. Each strategy runs at least {durationText(settings.minimumActiveMs)}.</span>
               </div>
               <div className="table-wrap">
                 <div className="table-top">
@@ -326,207 +344,95 @@ export default async function TokenPage({
               </div>
             </section>
 
-            <section
-              className="stack stack--tight"
-              aria-labelledby="ledger-title"
-            >
-              <h2 className="section-title" id="ledger-title">
-                Ledger
-              </h2>
+            <section className="stack stack--tight" aria-labelledby="rewards-title">
               <div className="ledger-bar">
-                <div className="tabs" role="tablist" aria-label="Ledger views">
-                  <button
-                    className="tab"
-                    role="tab"
-                    id="tab-rewards"
-                    aria-controls="ledger-rewards"
-                    aria-selected="true"
-                    type="button"
-                    data-ledger="rewards"
-                  >
-                    Rewards
-                  </button>
-                  <button
-                    className="tab"
-                    role="tab"
-                    id="tab-votes"
-                    aria-controls="ledger-votes"
-                    aria-selected="false"
-                    type="button"
-                    tabIndex={-1}
-                    data-ledger="votes"
-                  >
-                    Votes
-                  </button>
-                  <button
-                    className="tab"
-                    role="tab"
-                    id="tab-gravity"
-                    aria-controls="ledger-gravity"
-                    aria-selected="false"
-                    type="button"
-                    tabIndex={-1}
-                    data-ledger="gravity"
-                  >
-                    Gravity
-                  </button>
-                </div>
-                <span className="status" id="votes-updated">
-                  Votes refresh automatically
-                </span>
+                <h2 className="section-title section-title--sm" id="rewards-title">Rewards</h2>
+                <span className="status" id="votes-updated">Votes refresh automatically</span>
               </div>
-
-              <div
-                className="table-wrap"
-                role="tabpanel"
-                id="ledger-rewards"
-                aria-labelledby="tab-rewards"
-              >
+              <div className="table-wrap" id="ledger-rewards">
                 <table className="table">
                   <thead>
                     <tr>
                       <th scope="col">#</th>
                       <th scope="col">Strategy</th>
-                      <th scope="col" className="num">
-                        Spent
-                      </th>
+                      <th scope="col" className="num">Spent</th>
                       <th scope="col">Result</th>
                       <th scope="col">Recipient</th>
-                      <th scope="col" className="num">
-                        When
-                      </th>
-                      <th scope="col" className="num">
-                        <span className="sr-only">Transaction</span>
-                      </th>
+                      <th scope="col" className="num">When</th>
+                      <th scope="col" className="num"><span className="sr-only">Transaction</span></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {
-                      <tr>
-                        <td colSpan={7} className="empty-table">
-                          No confirmed treasury executions.
-                        </td>
-                      </tr>
-                    }
-                  </tbody>
-                </table>
-              </div>
-
-              <div
-                className="table-wrap"
-                role="tabpanel"
-                id="ledger-votes"
-                aria-labelledby="tab-votes"
-                hidden
-              >
-                <table className="table">
-                  <thead>
                     <tr>
-                      <th scope="col">Wallet</th>
-                      <th scope="col">Voted for</th>
-                      <th scope="col" className="num">
-                        Gravity
-                      </th>
-                      <th scope="col" className="num">
-                        Weight
-                      </th>
-                      <th scope="col" className="num">
-                        When
-                      </th>
+                      <td colSpan={7} className="empty-table">No rewards yet.</td>
                     </tr>
-                  </thead>
-                  <tbody data-votes-body="">
-                    {
-                      <tr>
-                        <td colSpan={5} className="empty-table">
-                          Loading holder votes…
-                        </td>
-                      </tr>
-                    }
-                  </tbody>
-                </table>
-              </div>
-
-              <div
-                className="table-wrap"
-                role="tabpanel"
-                id="ledger-gravity"
-                aria-labelledby="tab-gravity"
-                hidden
-              >
-                <div className="table-top">
-                  <div className="table-top__row">
-                    <span className="label label--sm">Gravity share</span>
-                    <span className="label label--sm">Indexed holders</span>
-                  </div>
-                  <div
-                    className="odds"
-                    role="img"
-                    aria-label="Gravity distribution across active holders"
-                  ></div>
-                </div>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th scope="col">#</th>
-                      <th scope="col">Wallet</th>
-                      <th scope="col" className="num">
-                        $SLAB
-                      </th>
-                      <th scope="col" className="num">
-                        Held
-                      </th>
-                      <th scope="col" className="num">
-                        Gravity
-                      </th>
-                      <th scope="col" aria-sort="descending">
-                        Share ↓
-                      </th>
-                      <th scope="col">Vote</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leaderboard.holders.length ? (
-                      leaderboard.holders.slice(0, 100).map((h, i) => (
-                        <tr>
-                          <td className="dim">{i + 1}</td>
-                          <td className="mono mono--md">
-                            {shortAddress(h.wallet)}
-                          </td>
-                          <td className="num">{h.balance.toLocaleString()}</td>
-                          <td className="num">—</td>
-                          <td className="num">{h.gravity.toLocaleString()}</td>
-                          <td>
-                            <span className="meter">
-                              <span className="bar">
-                                <i
-                                  style={{ width: `${100 * h.probability}%` }}
-                                />
-                              </span>
-                              <b>{(100 * h.probability).toFixed(1)}%</b>
-                            </span>
-                          </td>
-                          <td>
-                            {visibleVotes.has(h.wallet)
-                              ? strategyName(
-                                  visibleVotes.get(h.wallet)!,
-                                  catalog || undefined,
-                                )
-                              : "—"}
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={7} className="empty-table">
-                          No indexed eligible holders.
-                        </td>
-                      </tr>
-                    )}
                   </tbody>
                 </table>
               </div>
             </section>
+
+            <div className="ledger-pair">
+              <section className="stack stack--tight" aria-labelledby="votes-title">
+                <h2 className="section-title section-title--sm" id="votes-title">Votes</h2>
+                <div className="table-wrap" id="ledger-votes">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Wallet</th>
+                        <th scope="col">Voted for</th>
+                        <th scope="col" className="num">When</th>
+                      </tr>
+                    </thead>
+                    <tbody data-votes-body="">
+                      <tr>
+                        <td colSpan={3} className="empty-table">Loading holder votes…</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="stack stack--tight" aria-labelledby="holders-title">
+                <h2 className="section-title section-title--sm" id="holders-title">Holders</h2>
+                <div className="table-wrap" id="ledger-gravity">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Wallet</th>
+                        <th scope="col" className="num">Held</th>
+                        <th scope="col" aria-sort="descending">Gravity ↓</th>
+                      </tr>
+                    </thead>
+                    <tbody id="gravity-ledger-body">
+                      {leaderboard.holders.length ? (
+                        leaderboard.holders.slice(0, 100).map((h) => (
+                          <tr>
+                            <td>
+                              <span className="cell-2" title={visibleVotes.has(h.wallet)
+                                ? `Votes for ${strategyName(visibleVotes.get(h.wallet)!, catalog || undefined)}` : undefined}>
+                                <span className="mono mono--md">{shortAddress(h.wallet)}</span>
+                                <small>{h.balance.toLocaleString("en-US", { maximumFractionDigits: 0 })} ${token.symbol}</small>
+                              </span>
+                            </td>
+                            <td className="num">{h.heldSince ? elapsedText(Date.now() - h.heldSince) : "—"}</td>
+                            <td>
+                              <span className="meter">
+                                <span className="bar"><i style={{ width: `${100 * h.probability}%` }} /></span>
+                                <b>{(100 * h.probability).toFixed(1)}%</b>
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={3} className="empty-table">No indexed eligible holders.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
           </div>
         </div>
       </main>

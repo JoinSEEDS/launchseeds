@@ -9,6 +9,7 @@ import {
   getMintMarketCap,
 } from "../src/server/token-market";
 import { mapLimited } from "../lib/async-batch";
+import { unclaimedFeesSoon } from "../src/server/creator-fees";
 
 export default async function HomePage() {
   const store = getStore();
@@ -18,7 +19,7 @@ export default async function HomePage() {
     getTokenMarketCap().catch(() => null),
   ]);
   const items = tokens.map((token) => {
-    const board = strategyBoard(token.uid),
+    const board = strategyBoard(token.id),
       active = board?.active;
     const quote = active ? quoteStrategy(active, catalog, Date.now()) : null;
     const cost = quote?.costMicros ?? null;
@@ -40,12 +41,18 @@ export default async function HomePage() {
   });
   // Bound concurrent RPC reads; only real pool-derived prices and actual mint
   // supply can produce a market cap. Never fill the table with sample prices.
-  const capPairs = await mapLimited(items, 4, async ({ token }) => ({
-    uid: token.uid,
-    cap: await getMintMarketCap(token.mint, token.priceUsd),
-  }));
-  const marketCaps = new Map(capPairs.map((row) => [row.uid, row.cap]));
-  const sum = items.reduce((n, row) => n + row.available, 0);
+  const capPairs = await mapLimited(items, 4, async ({ token }) => {
+    const [cap, fees] = await Promise.all([
+      getMintMarketCap(token.mint, token.priceUsd),
+      unclaimedFeesSoon(token),
+    ]);
+    return { id: token.id, cap, fees };
+  });
+  const marketCaps = new Map(capPairs.map((row) => [row.id, row.cap]));
+  // Recorded treasury credit plus creator fees still unclaimed in on-chain vaults.
+  const sum =
+    items.reduce((n, row) => n + row.available, 0) +
+    capPairs.reduce((n, row) => n + (row.fees ?? 0), 0);
   const best = items
     .filter((row) => row.cost !== null)
     .sort((a, b) => b.progress - a.progress)[0];
@@ -84,7 +91,7 @@ export default async function HomePage() {
           <div className="kv">
             <div>
               <div className="label label--sm">Fees accumulated</div>
-              <div className="kv__value">${(sum / 1e6).toFixed(2)}</div>
+              <div className="kv__value" data-num="">${(sum / 1e6).toFixed(2)}</div>
             </div>
             <div className="kv__item--end">
               <div className="label label--sm">Live treasuries</div>
@@ -94,7 +101,7 @@ export default async function HomePage() {
           <a
             className="panel__foot"
             href={
-              best ? `/token/${encodeURIComponent(best.token.uid)}` : "/launch"
+              best ? `/token/${encodeURIComponent(best.token.mint ?? "")}` : "/launch"
             }
           >
             <span>
@@ -230,7 +237,7 @@ export default async function HomePage() {
                     }) => (
                       <tr
                         className="is-link"
-                        data-href={`/token/${encodeURIComponent(token.uid)}`}
+                        data-href={`/token/${encodeURIComponent(token.mint ?? "")}`}
                         data-progress={String(progress)}
                         data-created={String(token.createdAt)}
                         data-switched={String(board?.switchedAt || 0)}
@@ -239,7 +246,7 @@ export default async function HomePage() {
                         <td>
                           <a
                             className="token"
-                            href={`/token/${encodeURIComponent(token.uid)}`}
+                            href={`/token/${encodeURIComponent(token.mint ?? "")}`}
                           >
                             <span
                               className="av"
@@ -293,7 +300,7 @@ export default async function HomePage() {
                           </span>
                         </td>
                         <td className="num">
-                          {marketCaps.get(token.uid) ?? "—"}
+                          {marketCaps.get(token.id) ?? "—"}
                         </td>
                         <td className="num">{holders.toLocaleString()}</td>
                       </tr>

@@ -14,6 +14,7 @@ import {
   type LaunchFormFields,
   type PublicLaunchStatus,
 } from "../lib/launch-ui";
+import { DEFAULT_LAUNCH_SETTINGS } from "../src/domain/launch-settings";
 import { DESCRIPTION } from "../lib/strategy";
 
 const fields: LaunchFormFields = {
@@ -25,9 +26,10 @@ const fields: LaunchFormFields = {
   telegram: "@launchseeds",
   image: "https://launchseeds.xyz/example.png",
   firstStrategy: { type: "burn", amount: 25 },
+  settings: DEFAULT_LAUNCH_SETTINGS,
 };
 const baseline: PublicLaunchStatus = {
-  uid: "550e8400-e29b-41d4-a716-446655440000",
+  handle: "0123456789abcdef0123456789abcdef",
   status: "funding",
   name: "Launchseeds",
   symbol: "FAIR",
@@ -57,12 +59,25 @@ describe("launch field preparation", () => {
         "telegram",
         "devBuySol",
         "firstStrategy",
+        "settings",
       ].sort(),
     );
   });
 
   test("accepts valid launch fields", () => {
     expect(validateLaunchFields(fields)).toBeNull();
+  });
+
+  test("social fields are optional and accept pasted links", async () => {
+    const { launchInput } = await import("../src/shared/domain");
+    for (const telegram of ["", "   ", " @launchseeds ", "https://t.me/launchseeds/", "https://t.me/+Abc_123-xyz", "https://t.me/joinchat/Abc123", "https://telegram.me/launchseeds"]) {
+      const input = { ...fields, website: "   ", x: " https://x.com/launchseeds ", telegram };
+      expect(validateLaunchFields(input)).toBeNull();
+      const parsed = launchInput.parse(buildLaunchPayload(input));
+      expect(parsed.website).toBe("");
+      expect(parsed.x).toBe("launchseeds");
+    }
+    expect(launchInput.parse(buildLaunchPayload({ ...fields, website: "", x: "", telegram: "" })).telegram).toBe("");
   });
 
   test("rejects invalid tickers, URLs, usernames, and dev buy precision", () => {
@@ -81,7 +96,7 @@ describe("launch field preparation", () => {
     );
     expect(
       validateLaunchFields({ ...fields, devBuySol: "1.0000000001" }),
-    ).toContain("dev buy");
+    ).toContain("initial reward fund");
   });
 
   test("uses integer lamports for quotes without floating point rounding", () => {
@@ -102,9 +117,13 @@ describe("launch field preparation", () => {
   });
 
   test("only exposes well-shaped public launch URLs", () => {
-    const uid = baseline.uid;
-    expect(launchUrl(uid)).toBe(`/launch?uid=${uid}`);
-    expect(publicTokenUrl(uid)).toBe(`/token/${uid}`);
+    const uid = baseline.handle;
+    expect(launchUrl(uid)).toBe(`/launch?launch=${uid}`);
+    // Launches created before 2026-10-25 keep their id-shaped handle.
+    expect(launchUrl("550e8400-e29b-41d4-a716-446655440000")).toBe("/launch?launch=550e8400-e29b-41d4-a716-446655440000");
+    const mint = "HchTYRATYXki7CAKkyRGMqMuKejgVxit6YYzwMfZBmtM";
+    expect(publicTokenUrl(mint)).toBe(`/token/${mint}`);
+    expect(publicTokenUrl(uid)).toBeNull();
     expect(launchUrl("../../api/launches")).toBeNull();
     expect(publicTokenUrl("garbage")).toBeNull();
   });
@@ -129,7 +148,7 @@ describe("launch status presentation", () => {
     expect(validLaunchStatus({ ...baseline, receivedLamports: "20" })).toBe(
       false,
     );
-    expect(validLaunchStatus({ ...baseline, uid: "../../token" })).toBe(false);
+    expect(validLaunchStatus({ ...baseline, handle: "../../token" })).toBe(false);
   });
 
   test("hides funding address while preparing", () => {
@@ -189,9 +208,15 @@ describe("image submission", () => {
     ).toContain("empty");
     expect(
       validateImage(
-        new File([new Uint8Array(550_001)], "huge.png", { type: "image/png" }),
+        new File([new Uint8Array(5_000_001)], "huge.png", { type: "image/png" }),
       ),
-    ).toContain("550 KB");
+    ).toContain("5 MB");
+  });
+
+  test("accepts images above the old cap through exactly 5 MB", () => {
+    for (const size of [550_001, 5_000_000]) {
+      expect(validateImage(new File([new Uint8Array(size)], "token.png", {type:"image/png"}))).toBeNull();
+    }
   });
 
   test("allows a valid small PNG", () => {

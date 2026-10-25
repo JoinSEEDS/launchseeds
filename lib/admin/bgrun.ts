@@ -19,7 +19,9 @@ export interface ProcessSummary {
 }
 
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
-const MAX_LIST_BYTES = 128 * 1024;
+// `bgrun --json` includes every registered process with its env, so it grows
+// with the host's registry (140KB+ observed); keep a bound, but a generous one.
+const MAX_LIST_BYTES = 8 * 1024 * 1024;
 const MAX_LOG_BYTES = 256 * 1024;
 const MAX_LOG_LINES = 120;
 const COMMAND_TIMEOUT_MS = 7_000;
@@ -142,8 +144,14 @@ export function parseProcessList(
   return results.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function listProcesses(): Promise<ProcessSummary[]> {
-  return parseProcessList(await runBgrun(["--json"]));
+/** The bgrun registry is host-wide; admin only sees (and can read logs of)
+ * this app's configured processes, never unrelated services on the host. */
+export async function listProcesses(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ProcessSummary[]> {
+  return parseProcessList(await runBgrun(["--json"]), env).filter(
+    (process) => process.manageable,
+  );
 }
 
 export async function registeredProcess(name: string): Promise<ProcessSummary> {

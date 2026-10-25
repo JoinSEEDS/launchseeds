@@ -1,4 +1,38 @@
 {
-  "compilerOptions": { "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler", "strict": true, "skipLibCheck": true, "noEmit": true },
-  "include": ["src", "tests"]
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "tradjs/client",
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "types": [
+      "bun"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "tradjs": [
+        "./node_modules/tradjs/src/web.ts"
+      ],
+      "tradjs/*": [
+        "./node_modules/tradjs/src/*"
+      ]
+    }
+  },
+  "include": [
+    "app",
+    "lib",
+    "src",
+    "scripts",
+    "tests"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".docs"
+  ]
 }

@@ -10,11 +10,12 @@ import { getLaunchService } from "../../../src/server/runtime";
 import { getOperationalLaunchReadiness } from "../../../src/server/launch-health";
 import { publicRouteError } from "../../../src/server/route-errors";
 import type { LaunchInput } from "../../../src/shared/domain";
+import { parseLaunchSettings } from "../../../src/domain/launch-settings";
 import { IngressRateLimiter } from "../../../lib/trusted-client";
 
 // One bounded in-process fuse for this route. Trusted ingress must enforce
 // per-client quotas; untrusted forwarding headers are never used as identities.
-const launchLimit = new IngressRateLimiter("launch", 60, 60_000);
+const launchLimit = new IngressRateLimiter("launch", 5, 10 * 60_000);
 
 /** Prepare a real funding address for a governed token's initial strategy. */
 export async function POST(request: Request): Promise<Response> {
@@ -41,9 +42,16 @@ export async function POST(request: Request): Promise<Response> {
     const payload = await readBoundedJson<
       LaunchInput & {
         firstStrategy?: unknown;
+        settings?: unknown;
       }
     >(request, 16_384);
     let firstStrategy;
+    let settings;
+    try {
+      settings = parseLaunchSettings(payload.settings);
+    } catch (error) {
+      throw new ApiError(error instanceof Error ? error.message : "Invalid launch settings.", 400);
+    }
     try {
       firstStrategy = await normalizeStrategy(payload.firstStrategy);
     } catch (error) {
@@ -69,7 +77,8 @@ export async function POST(request: Request): Promise<Response> {
         description: DESCRIPTION,
       },
       capability,
-      (uid) => saveFirstStrategy(uid, firstStrategy),
+      (tokenId) => saveFirstStrategy(tokenId, firstStrategy),
+      settings,
     );
     return apiJson(status, 201);
   } catch (error) {

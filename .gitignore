@@ -26,3 +26,4 @@ package-lock.json
 
 # Private bgrun runtime secrets
 .config.toml
+bun.lock

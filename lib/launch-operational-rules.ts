@@ -24,7 +24,7 @@ export interface OperationalInput {
   flags: { launch: boolean; live: boolean; worker: boolean };
   config: {
     rpc: boolean;
-    publicBase: boolean;
+    publicBase?: boolean; // legacy input; IPFS metadata does not require an app origin
     signedIngress: boolean;
     feeLamports: number | null;
   };
@@ -62,7 +62,7 @@ export function assessLaunchReadiness(
   if (!input.flags.live) blockers.push("operations_disabled");
   if (!input.flags.worker) blockers.push("worker_disabled");
   if (!input.config.signedIngress) blockers.push("trusted_ingress_unavailable");
-  if (!input.config.rpc || !input.config.publicBase)
+  if (!input.config.rpc)
     blockers.push("configuration_incomplete");
   const fee = input.config.feeLamports;
   if (fee === null || !Number.isSafeInteger(fee) || fee <= 0)
