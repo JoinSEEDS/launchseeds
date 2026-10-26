@@ -54,7 +54,14 @@ export function imageFromItems(items: unknown, workingDirectory?: string): Buffe
   return null;
 }
 
-export function generateTokenImage(name: string, symbol: string, signal?: AbortSignal): Promise<Buffer> {
+/** `prompt` (admin only) replaces the token-icon prompt; the house style reference
+ * is still attached unless `styleReference` is false. */
+export function generateTokenImage(
+  name: string,
+  symbol: string,
+  signal?: AbortSignal,
+  options: { prompt?: string; styleReference?: boolean } = {},
+): Promise<Buffer> {
   const run = running.then(async () => {
     signal?.throwIfAborted();
     const workingDirectory = process.env.LAUNCHSEEDS_IMAGE_WORK_DIR || join(tmpdir(), "launchseeds-imagegen");
@@ -74,8 +81,8 @@ export function generateTokenImage(name: string, symbol: string, signal?: AbortS
         }),
         jsx("message", {
           role: "user",
-          children: `$imagegen ${imagePrompt(name, symbol)}`,
-          attachments: existsSync(reference)
+          children: `$imagegen ${options.prompt || imagePrompt(name, symbol)}`,
+          attachments: options.styleReference !== false && existsSync(reference)
             ? [{ type: "image", path: reference, mimeType: "image/png", alt: "Style reference" }]
             : undefined,
         }),

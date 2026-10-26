@@ -10,6 +10,8 @@ import {
 import { initials, shortAddress } from "../../../lib/format";
 import { getMintMarketCap } from "../../../src/server/token-market";
 import { unclaimedFeesSoon } from "../../../src/server/creator-fees";
+import { tokenWins, raffleLeaderboard } from "../../../src/server/draws";
+import { marketView } from "../../../src/server/market-view";
 
 function boardLockUntil(tokenId: number, store: ReturnType<typeof getStore>, settings: ReturnType<typeof storedLaunchSettings>, now: number) {
   const token = store.repo.tokens.get(tokenId);
@@ -88,7 +90,14 @@ export default async function TokenPage({
     getMintMarketCap(token.mint, token.priceUsd),
     unclaimedFeesSoon(token),
   ]);
-  const leaderboard = store.leaderboard(token.id);
+  const holderCount = store.leaderboard(token.id).holders.length;
+  const leaderboard = raffleLeaderboard(store, token.id);
+  const wins = tokenWins(store, token.id);
+  const market = marketView(store, token.id);
+  const sol = (lamports: string | bigint) => `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
+  const units = (raw: string) => (Number(raw) / 10 ** market.tokenDecimals).toLocaleString("en-US", { maximumFractionDigits: 0 });
+  const pendingWin = wins.find((w) => !w.card) ?? null;
+  const nextPack = (wins[0]?.number ?? 0) + 1;
   // Public votes may be capped by the governance journal. An absent vote here
   // means unobserved, not necessarily that the holder never voted.
   const visibleVotes = new Map(
@@ -99,7 +108,7 @@ export default async function TokenPage({
     : "Not configured";
   return (
     <>
-      <main className="page" id="governed-token" data-token-mint={token.mint ?? ""}>
+      <main className="page" id="governed-token" data-token-mint={token.mint ?? ""} data-holder-rewards={market.holderRewards ? "true" : "false"}>
         <div className="page-head">
           <span className="av av--lg" style={{ background: "#2e3b78" }}>
             {token.image ? (
@@ -165,7 +174,7 @@ export default async function TokenPage({
             <div>
               <div className="label label--sm">Active holders</div>
               <div className="kv__value" data-num="">
-                {leaderboard.holders.length.toLocaleString()}
+                {holderCount.toLocaleString()}
               </div>
             </div>
           </div>
@@ -194,6 +203,13 @@ export default async function TokenPage({
           </div>
           <div className="treasury">
             <div>
+              <p className="treasury-next" id="treasury-next">
+                {pendingWin
+                  ? <>Pack #{pendingWin.number} winner drawn: <span className="mono">{shortAddress(pendingWin.winner)}</span>. Fees first buy their {pendingWin.packName} (${pendingWin.priceUsd.toFixed(2)}), then collect for pack #{nextPack}.</>
+                  : wins.length
+                    ? <>Collecting fees for pack #{nextPack}.</>
+                    : null}
+              </p>
               <div className="label label--sm">Waiting to pay out</div>
               <div className="treasury__amount">
                 <b id="treasury-available" data-num="">${available.toFixed(2)}</b>
@@ -344,11 +360,62 @@ export default async function TokenPage({
               </div>
             </section>
 
+            {market.holderRewards ? (
+              <section className="stack stack--tight" aria-labelledby="market-title" id="market-making">
+                <div className="ledger-bar">
+                  <h2 className="section-title section-title--sm" id="market-title">Market making</h2>
+                  <span className="status">Public wallet, fixed sell plan</span>
+                </div>
+                <p className="setting-help">
+                  Trading fees go to holders automatically through Pump. This coin's launch buy was made by a public
+                  market-making wallet{" "}
+                  {market.wallet ? (
+                    <a className="mono" href={`https://solscan.io/account/${market.wallet}`} target="_blank" rel="noopener noreferrer">{shortAddress(market.wallet)}</a>
+                  ) : "—"}{" "}
+                  that sells only at the market caps below, set at launch and never changed. The profit of each sale
+                  goes to this coin's treasury and buys its rewards for holders.
+                </p>
+                <div className="table-wrap" id="market-plan">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Sell at market cap</th>
+                        <th scope="col" className="num">Of launch buy</th>
+                        <th scope="col">Status</th>
+                        <th scope="col" className="num">SOL received</th>
+                        <th scope="col" className="num"><span className="sr-only">Transaction</span></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {market.plan.map((p) => (
+                        <tr className={p.status === "sold" ? "" : "is-pending"}>
+                          <td>${p.marketCapUsd.toLocaleString("en-US")}</td>
+                          <td className="num">{p.percent}%</td>
+                          <td>{p.status === "sold" ? `Sold ${p.at ? `${elapsedText(Date.now() - p.at)} ago` : ""}` : p.status === "selling" ? "Selling…" : "Waiting"}</td>
+                          <td className="num">{p.lamports ? (Number(p.lamports) / 1e9).toFixed(4) : "—"}</td>
+                          <td className="num">{p.signature ? <a href={`https://solscan.io/tx/${p.signature}`} target="_blank" rel="noopener noreferrer">Tx</a> : null}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <dl className="dl" id="market-summary">
+                  <dt>Launch buy</dt>
+                  <dd data-num="">{units(market.launchTokensRaw)} ${token.symbol}</dd>
+                  <dt>Still held</dt>
+                  <dd data-num="">{units(market.positionRaw)} ${token.symbol} · cost {sol(market.costLamports)}</dd>
+                  <dt>Realized profit → treasury</dt>
+                  <dd data-num="">{sol(market.realizedLamports)}</dd>
+                </dl>
+              </section>
+            ) : null}
+
             <section className="stack stack--tight" aria-labelledby="rewards-title">
               <div className="ledger-bar">
                 <h2 className="section-title section-title--sm" id="rewards-title">Rewards</h2>
                 <span className="status" id="votes-updated">Votes refresh automatically</span>
               </div>
+              <p className="opt-note" id="claim-message" role="status" aria-live="polite" hidden></p>
               <div className="table-wrap" id="ledger-rewards">
                 <table className="table">
                   <thead>
@@ -363,9 +430,41 @@ export default async function TokenPage({
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td colSpan={7} className="empty-table">No rewards yet.</td>
-                    </tr>
+                    {wins.length ? (
+                      wins.map((w) => (
+                        <tr className={w.card || w.stock?.status === "sent" ? "" : "is-pending"}>
+                          <td>{w.number}</td>
+                          <td>{w.packName}</td>
+                          <td className="num">${w.priceUsd.toFixed(2)}</td>
+                          <td>
+                            {w.stock
+                              ? `${w.stock.amount} ${w.stock.symbol} · ${w.stock.status === "sent" ? "sent" : w.stock.status === "needs_review" ? "under review" : "sending"}`
+                              : w.card ? w.card.name : "Winner drawn · card on the way"}
+                            {w.card && !w.card.deliverySignature ? <small className="dim"> · waiting for the winner to claim</small> : null}
+                          </td>
+                          <td>
+                            <span className="mono">{shortAddress(w.winner)}</span>
+                            <small className="dim"> · {(w.chance * 100).toFixed(w.chance >= 0.1 ? 1 : 2)}% chance</small>
+                          </td>
+                          <td className="num">{elapsedText(Date.now() - (w.card?.at ?? w.stock?.sentAt ?? w.drawnAt))} ago</td>
+                          <td className="num">
+                            {w.stock?.signature ? (
+                              <a href={`https://solscan.io/tx/${w.stock.signature}`} target="_blank" rel="noopener noreferrer">Tx</a>
+                            ) : w.card?.deliverySignature ? (
+                              <a href={`https://solscan.io/tx/${w.card.deliverySignature}`} target="_blank" rel="noopener noreferrer">Tx</a>
+                            ) : w.card ? (
+                              <button className="btn btn--sm btn--accent" type="button" data-claim-card={w.card.mint} data-winner={w.winner}>Claim</button>
+                            ) : (
+                              <a href={`/api/tokens/${token.mint}/draws?number=${w.number}`} target="_blank" rel="noopener">Verify</a>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={7} className="empty-table">No rewards yet.</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -393,7 +492,8 @@ export default async function TokenPage({
               </section>
 
               <section className="stack stack--tight" aria-labelledby="holders-title">
-                <h2 className="section-title section-title--sm" id="holders-title">Holders</h2>
+                <h2 className="section-title section-title--sm" id="holders-title">Raffle participants</h2>
+                <p className="muted">Earned Gravity stays eligible after selling. Selling stops new Gravity accrual.</p>
                 <div className="table-wrap" id="ledger-gravity">
                   <table className="table">
                     <thead>

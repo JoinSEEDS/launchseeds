@@ -45,14 +45,18 @@ function contest(start = launchedAt + 12_000) {
 
 describe("launch policy storage", () => {
   test("defaults are exact, immutable choices", () => {
-    // Designer v5 defaults: 24h lock, 1h minimum, 30s puzzle, 25% at $100K–$1M.
+    // Designer v5 defaults: 24h lock, 1h minimum, 30s puzzle; liquidity off until it exists.
     expect(DEFAULT_LAUNCH_SETTINGS).toEqual({
       firstStrategyLockMs: day,
       minimumActiveMs: hour,
       sniperSeconds: 30,
-      liquidity: { feeShare: 25, minMcapUsd: 100_000, maxMcapUsd: 1_000_000 },
+      liquidity: null,
+      holderRewards: false,
+      sellPlan: [],
     });
     expect(Object.isFrozen(DEFAULT_LAUNCH_SETTINGS)).toBe(true);
+    // Launches stored before holder rewards existed read as ordinary launches.
+    expect(parseLaunchSettings({ firstStrategyLockMs: day, minimumActiveMs: hour, sniperSeconds: 30, liquidity: null }).holderRewards).toBe(false);
     expect(parseLaunchSettings(DEFAULT_LAUNCH_SETTINGS)).toEqual(DEFAULT_LAUNCH_SETTINGS);
   });
 
@@ -191,7 +195,7 @@ describe("fee allocation, liquidity range and enforcement", () => {
   test("creators may choose sniper protection and liquidity before the executors exist", () => {
     expect(parseLaunchSettings(DEFAULT_LAUNCH_SETTINGS).sniperSeconds).toBe(30);
     expect(parseLaunchSettings({ ...DEFAULT_LAUNCH_SETTINGS, sniperSeconds: null, liquidity: null }))
-      .toEqual({ firstStrategyLockMs: day, minimumActiveMs: hour, sniperSeconds: null, liquidity: null });
+      .toEqual({ firstStrategyLockMs: day, minimumActiveMs: hour, sniperSeconds: null, liquidity: null, holderRewards: false, sellPlan: [] });
   });
   test("human-facing names are deterministic", () => {
     expect(sniperDescription(DEFAULT_LAUNCH_SETTINGS)).toBe("30s puzzle");

@@ -2,7 +2,7 @@ import { DESCRIPTION } from "../../lib/strategy";
 import { solToLamports } from "../../src/shared/domain";
 import { launchTotal } from "../../lib/launch-ui";
 import { DESIGN_LAUNCH_FEE_LAMPORTS } from "../../lib/launch-presentation";
-import { SNIPER_SECONDS, MARKET_CAP_STOPS, MAX_LIQUIDITY_SHARE } from "../../src/domain/launch-settings";
+import { SNIPER_SECONDS, MARKET_CAP_STOPS, MAX_LIQUIDITY_SHARE, LIQUIDITY_AVAILABLE, DEFAULT_SELL_PLAN } from "../../src/domain/launch-settings";
 
 export default function LaunchPage() {
   // This is a display quote, not a readiness signal. The API independently
@@ -172,6 +172,27 @@ export default function LaunchPage() {
               </div>
             </section>
 
+            <section className="panel toggle-panel" data-toggle-panel="holder" id="holder-rewards">
+              <div className="panel__head">
+                <span className="label" id="t-holder">Holder rewards + market making</span>
+                <button className="switch" type="button" role="switch" aria-checked="false" aria-labelledby="t-holder" data-switch=""></button>
+              </div>
+              <div className="toggle-panel__body">
+                <p className="setting-help">
+                  Trading fees go to holders automatically through Pump. Your launch buy is made by a new, public
+                  market-making wallet that sells only at these market caps, fixed at launch. The profit of each sale
+                  buys this coin's rewards (packs or stocks) for holders. Needs a launch buy.
+                </p>
+                <ol className="sell-plan" id="sell-plan">
+                  {DEFAULT_SELL_PLAN.map((p) => (
+                    <li>
+                      <b>{p.percent}%</b> of the launch buy at <b>${p.marketCapUsd.toLocaleString("en-US")}</b> market cap
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </section>
+
             <section className="panel">
               <div className="panel__head">
                 <span className="label">Default strategy</span>
@@ -192,7 +213,7 @@ export default function LaunchPage() {
               </div>
             </section>
 
-            <section className="panel toggle-panel" data-toggle-panel="liq" id="launch-liquidity">
+            <section className="panel toggle-panel" data-toggle-panel="liq" id="launch-liquidity" hidden={!LIQUIDITY_AVAILABLE}>
               <div className="panel__head">
                 <span className="label" id="t-liq">Concentrated liquidity</span>
                 <button className="switch" type="button" role="switch" aria-checked="true" aria-labelledby="t-liq" data-switch=""></button>
@@ -275,13 +296,39 @@ export default function LaunchPage() {
                 </div>
                 <div className="pay__actions">
                   <button className="btn btn--primary" type="button" id="pay-in-wallet">Pay in Wallet</button>
-                  <button className="btn" type="button" id="free-launch" hidden>Free Launch</button>
+                  <button className="btn btn--accent" type="button" id="free-launch" hidden>Mine Free Launch</button>
                   <button className="btn" type="button" id="edit-launch-details" hidden>Edit Details</button>
                   <span className="status" id="payment-expiry">Expires in <b id="payment-expires">—</b></span>
                 </div>
                 <p className="opt-note" id="funding-copy-feedback" role="status" aria-live="polite"></p>
                 <p className="opt-note" id="free-launch-status" role="status" aria-live="polite" hidden></p>
                 <div className="bar" id="deposit-progress" role="progressbar" aria-label="Funding progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><i /></div>
+              </div>
+            </div>
+
+            <div className="mine" id="mine" hidden>
+              <div className="mine__head">
+                <span className="mine__text">
+                  <b id="mine-title">Mine a free launch</b>
+                  <span id="mine-sub"></span>
+                </span>
+                <button className="btn btn--primary" type="button" id="mine-start">Start Mining</button>
+                <button className="btn" type="button" id="mine-stop" hidden>Stop</button>
+              </div>
+              <div className="mine__stats" id="mine-stats" hidden>
+                <div><div className="label label--sm">Speed</div><b id="mine-speed">—</b></div>
+                <div><div className="label label--sm">Hashes</div><b id="mine-hashes">0</b></div>
+                <div><div className="label label--sm">Time</div><b id="mine-time">0:00</b></div>
+                <div><div className="label label--sm">Expected</div><b id="mine-expected">—</b></div>
+              </div>
+              <div className="mine__hashes mono" id="mine-rows" hidden>
+                <span><i>Target</i><span id="mine-target"></span></span>
+                <span><i>Best</i><span id="mine-best">—</span></span>
+                <span><i>Now</i><span id="mine-now">—</span></span>
+              </div>
+              <div className="wide-bar mine__bar" id="mine-bar" hidden>
+                <div className="bar" role="progressbar" aria-label="Share of expected work done" aria-valuemin="0" aria-valuemax="100"><i id="mine-work" /></div>
+                <small><span id="mine-work-text">0% of expected work</span><span>Free launch pool <b id="mine-pool">—</b></span></small>
               </div>
             </div>
 
@@ -362,9 +409,9 @@ export default function LaunchPage() {
             </div>
             <div className="panel__body summary-block">
               <div className="label label--sm">Fees</div>
-              <div className="split-bar" id="launch-fee-split" role="img" aria-label="10% to $TOKEN, 25% to liquidity, 65% to holder rewards"></div>
+              <div className="split-bar" id="launch-fee-split" role="img" aria-label={LIQUIDITY_AVAILABLE ? "10% to $TOKEN, 25% to liquidity, 65% to holder rewards" : "10% to $TOKEN, 90% to holder rewards"}></div>
               <div className="split-legend" id="launch-fee-legend"></div>
-              <p className="setting-help">$TOKEN first, then liquidity; the rest goes to holder rewards.</p>
+              <p className="setting-help">{LIQUIDITY_AVAILABLE ? "$TOKEN first, then liquidity; the rest goes to holder rewards." : "$TOKEN first; the rest goes to holder rewards."}</p>
             </div>
             <div className="panel__body">
               <dl className="dl">
@@ -394,6 +441,7 @@ export default function LaunchPage() {
             >
               Checking launch availability…
             </p>
+            <button id="recheck-launch" className="btn" type="button" hidden>Check availability again</button>
             <div
               className="panel__body"
               style={{ paddingTop: "0" }}

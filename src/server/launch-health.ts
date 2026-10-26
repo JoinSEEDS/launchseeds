@@ -15,6 +15,7 @@ import {
 } from "../../lib/launch-operational-rules";
 import { RequestCache } from "../../lib/request-cache";
 import { trustedIngressActive } from "../../lib/trusted-client";
+import { rpcFetch } from "./rpc-pacing";
 
 export interface WorkerHeartbeat {
   workerId: string;
@@ -133,7 +134,7 @@ export async function probeFinalizedRpc(
     url,
     async () => {
       try {
-        const response = await fetch(url, {
+        const response = await rpcFetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -176,6 +177,7 @@ export async function probeFinalizedRpc(
 export async function getOperationalLaunchReadiness(
   now = Date.now(),
 ): Promise<OperationalReadiness> {
+  const startedAt = Date.now();
   const rpcUrl = process.env.SOLANA_RPC_URL || "";
   let baseFeeLamports: number | null = null;
   try {
@@ -194,7 +196,7 @@ export async function getOperationalLaunchReadiness(
   }
   const rpc = await probeFinalizedRpc(rpcUrl, now);
   const assessed = assessLaunchReadiness({
-    now,
+    now: now + (Date.now() - startedAt),
     flags: {
       launch: process.env.LAUNCHSEEDS_LAUNCH_ENABLED === "true",
       live: process.env.LAUNCHSEEDS_LIVE_OPERATIONS === "true",

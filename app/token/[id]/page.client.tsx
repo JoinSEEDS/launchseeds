@@ -6,6 +6,7 @@ import {
   trackWalletProvider,
 } from "../../../lib/wallet-session";
 import bs58 from "bs58";
+import { cardClaimMessage } from "../../../lib/card-claim";
 import {
   createStrategyBuilder,
   StrategyLabel,
@@ -695,9 +696,47 @@ export default function mount() {
     startPolling();
   }
 
+  // Winners claim cards held in the treasury: sign a free message, the server
+  // transfers the card. Only the winning wallet's signature is accepted.
+  const rewards = document.getElementById("ledger-rewards");
+  const claimMessage = document.getElementById("claim-message");
+  const onClaim = async (event: Event) => {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-claim-card]");
+    if (!button || button.disabled || !claimMessage) return;
+    const nftMint = button.dataset.claimCard!;
+    const winner = button.dataset.winner!;
+    claimMessage.hidden = false;
+    button.disabled = true;
+    try {
+      if (!wallet || !provider) await connectWallet();
+      if (wallet !== winner) throw new Error(`This card was won by ${winner.slice(0, 4)}…${winner.slice(-4)}. Connect that wallet to claim it.`);
+      setMessage(claimMessage, "Sign the claim in your wallet. It is free and sends nothing.");
+      const issuedAt = Date.now();
+      const signed = await provider!.signMessage(new TextEncoder().encode(cardClaimMessage(nftMint, wallet, issuedAt)), "utf8");
+      setMessage(claimMessage, "Sending your card…");
+      const result = await postJson<{ signature: string }>(
+        "/api/cards/claim",
+        { nftMint, wallet, issuedAt, signature: bs58.encode(signed.signature) },
+        { timeoutMs: 120_000 },
+      );
+      setMessage(claimMessage, "Card sent to your wallet.");
+      const link = document.createElement("a");
+      link.href = `https://solscan.io/tx/${result.signature}`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Tx";
+      button.replaceWith(link);
+    } catch (error) {
+      button.disabled = false;
+      setMessage(claimMessage, errorText(error), true);
+    }
+  };
+  rewards?.addEventListener("click", onClaim);
+
   void initialize();
   return () => {
     destroyed = true;
+    rewards?.removeEventListener("click", onClaim);
     generation++;
     poller?.stop();
     treasuryPoller?.stop();

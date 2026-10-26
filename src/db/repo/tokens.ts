@@ -134,6 +134,14 @@ export function tokenRepo(db: SqlDb) {
     update(id: number, patch: Partial<Token>) {
       return patchById(db, "tokens", id, patch, PATCH);
     },
+    /** Holder-reward launch: the public market-making wallet that makes the launch buy. */
+    assignMarketMaker(id: number, address: string) {
+      return patchById(db, "tokens", id, { devBuyRecipient: address }, ["devBuyRecipient"]);
+    },
+    /** Holder-reward coin gone live: its market-making wallet becomes the treasury. */
+    adoptMarketMakerTreasury(id: number, patch: { rewardWallet: string; fundingWalletName: string }) {
+      return patchById(db, "tokens", id, patch, ["rewardWallet", "fundingWalletName"]);
+    },
     /** Preparation lease, retry counters and stored launch inputs. */
     updateLaunch(id: number, patch: Partial<Token>) {
       return patchById(db, "tokens", id, patch, LAUNCH_PATCH);

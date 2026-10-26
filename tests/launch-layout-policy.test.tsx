@@ -78,7 +78,9 @@ describe("immutable launch-policy designer controls", () => {
     try {
       // The legend is drawn by the client; the server sends the stated order.
       const fees = d.getElementById("launch-fee-legend")!.closest(".summary-block")!.textContent || "";
-      expect(fees).toContain("$TOKEN first, then liquidity");
+      // Concentrated liquidity is not built: no fee share is promised for it.
+      expect(fees).toContain("$TOKEN first; the rest goes to holder rewards.");
+      expect(d.getElementById("launch-liquidity")?.hasAttribute("hidden")).toBe(true);
       expect(d.getElementById("launch-fee-split")?.getAttribute("role")).toBe("img");
     } finally { dom.window.close(); }
   });

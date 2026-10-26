@@ -21,7 +21,8 @@ export const StrategyConfig = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("stock"),
     ref: Id,
-    amountUsdCents: z.number().int().min(500),
+    /** Each win is at least $1 of the stock (owner decision 2026-10-26). */
+    amountUsdCents: z.number().int().min(100),
     mode: WeightMode,
   }),
   z.object({
@@ -42,6 +43,18 @@ export const StrategyConfig = z.discriminatedUnion("type", [
     type: z.literal("github"),
     handle: Id,
     amountUsdCents: z.number().int().min(500),
+  }),
+  /** Holder-governed market making (holder-reward coins). `amountUsdCents` is
+   * the size of one bot order; the bot buys after the price falls `spreadBps`
+   * below its last trade and sells after it rises `spreadBps` above it, holds at
+   * most `maxPositionPercent` of its value in the coin, and pays
+   * `payoutPercent` of realized profit to holders by Gravity. */
+  z.object({
+    type: z.literal("market"),
+    amountUsdCents: z.number().int().min(100).max(1_000_000),
+    spreadBps: z.number().int().min(200).max(5_000),
+    maxPositionPercent: z.number().int().min(10).max(90),
+    payoutPercent: z.number().int().min(0).max(100),
   }),
 ]);
 
@@ -158,7 +171,7 @@ export const schemas = {
   }),
   strategies: z.object({
     tokenId: RowId,
-    type: z.enum(["pack", "stock", "burn", "wallet", "x", "github"]),
+    type: z.enum(["pack", "stock", "burn", "wallet", "x", "github", "market"]),
     configKey: Id,
     configJson: z.string(),
     enabled: z.boolean().default(true),
@@ -279,7 +292,12 @@ export const schemas = {
   }),
   tokenBuybacks: z.object({
     treasuryId: RowId,
-    targetUsdCents: z.number().int().positive().default(50_000),
+    sourceTokenId: RowId.nullable().default(null),
+    targetMint: OptionalAddress.default(null),
+    requestKey: z.string().nullable().default(null),
+    authorizationJson: z.string().nullable().default(null),
+    spentLamports: Atomic.nullable().default(null),
+    targetUsdCents: z.number().int().nonnegative().default(50_000),
     reservedLamports: Atomic,
     status: BuybackStatus,
     signedSwapRef: z.string().nullable(),
@@ -303,6 +321,97 @@ export const schemas = {
     transaction: z.string().min(1),
     lastValidBlockHeight: z.number().int().nonnegative(),
     createdAt: Time,
+  }),
+  /** Pack winners. A draw is made from a frozen, hashed holder snapshot and a
+   * finalized blockhash observed after the freeze; anyone can recompute it.
+   * The pack is bought for this winner later (`executionId`, then a card). */
+  drawRevisions: z.object({
+    executionId: RowId,
+    previousDrawId: RowId,
+    snapshotJson: z.string(),
+    snapshotHash: z.string().length(64),
+    targetSlot: Slot,
+    reason: z.string(),
+    createdAt: Time,
+    completedAt: Time.default(0),
+    newDrawId: RowId.nullable().default(null),
+  }),
+  draws: z.object({
+    tokenId: RowId,
+    /** 1, 2, 3… per token. */
+    number: z.number().int().positive(),
+    packCode: Id,
+    packName: z.string(),
+    packImage: z.string().default(""),
+    priceUsdCents: z.number().int().positive(),
+    weightMode: WeightMode,
+    /** Canonical "wallet:weight" lines, sorted by wallet (what was hashed). */
+    snapshotJson: z.string(),
+    snapshotHash: z.string().length(64),
+    /** `finalized:<slot>:<blockhash>`. */
+    randomnessRef: z.string(),
+    winner: Address,
+    /** Winner's weight / total weight at the draw, 0–1. */
+    chance: z.number().min(0).max(1),
+    executionId: RowId.nullable().default(null),
+    drawnAt: Time,
+    /** Preliminary draw retained as evidence when replaced by a purchase draw. */
+    supersededAt: Time.default(0),
+  }),
+  /** Stock rewards (e.g. $1 of GLDx gold per win). Stock is bought in chunks
+   * (an execution); each win freezes the eligible snapshot first, is drawn from
+   * a finalized blockhash observed afterwards, then sent automatically. The
+   * signed transfer is stored before sending so a retry resends the same one. */
+  stockWins: z.object({
+    tokenId: RowId,
+    /** Shared numbering with pack draws: win #1, #2… per token. */
+    number: z.number().int().positive(),
+    /** The chunk purchase this win's tokens came from. */
+    executionId: RowId,
+    stockMint: Address,
+    symbol: z.string(),
+    decimals: z.number().int().min(0).max(18),
+    amountRaw: Atomic,
+    valueUsdCents: z.number().int().positive(),
+    weightMode: WeightMode,
+    snapshotJson: z.string(),
+    snapshotHash: z.string().length(64),
+    randomnessRef: z.string().nullable().default(null),
+    winner: OptionalAddress.default(null),
+    chance: z.number().min(0).max(1).nullable().default(null),
+    status: z.enum(["committed", "drawn", "sending", "sent", "needs_review"]),
+    signedTransaction: z.string().nullable().default(null),
+    signature: z.string().nullable().default(null),
+    lastValidBlockHeight: z.number().int().nonnegative().nullable().default(null),
+    error: z.string().nullable().default(null),
+    nextAttemptAt: Time.default(0),
+    createdAt: Time,
+    drawnAt: Time.nullable().default(null),
+    sentAt: Time.nullable().default(null),
+  }),
+  /** Market-maker trades (holder-reward coins: the launch buy and sell-plan
+   * sales), public on the token page. A sale is recorded as pending before it is
+   * sent; Solard's intent key makes a retry resume it. Position, cost basis and
+   * realized profit are running totals after each confirmed trade (average-cost
+   * accounting, lamports). */
+  mmTrades: z.object({
+    tokenId: RowId,
+    side: z.enum(["launch", "buy", "sell"]),
+    intentKey: z.string().min(1),
+    status: z.enum(["pending", "confirmed", "failed"]),
+    /** Buy: SOL to spend. Sell: tokens to sell. */
+    requestLamports: Atomic.default("0"),
+    requestTokensRaw: Atomic.default("0"),
+    /** Confirmed amounts: SOL spent (launch/buy) or received (sell); tokens bought or sold. */
+    lamports: Atomic.default("0"),
+    tokensRaw: Atomic.default("0"),
+    signature: z.string().nullable().default(null),
+    positionAfterRaw: Atomic.default("0"),
+    costAfterLamports: Atomic.default("0"),
+    realizedAfterLamports: z.string().regex(/^-?\d+$/).default("0"),
+    error: z.string().nullable().default(null),
+    createdAt: Time,
+    confirmedAt: Time.nullable().default(null),
   }),
 } as const;
 
@@ -328,6 +437,9 @@ export type Pack = Tables["packs"];
 export type Card = Tables["cards"];
 export type TokenBuyback = Tables["tokenBuybacks"];
 export type FreeLaunch = Tables["freeLaunches"];
+export type Draw = Tables["draws"];
+export type StockWin = Tables["stockWins"];
+export type MmTrade = Tables["mmTrades"];
 export type StrategyConfigValue = z.infer<typeof StrategyConfig>;
 export type LaunchStatusValue = z.infer<typeof LaunchStatus>;
 export type ExecutionStatusValue = z.infer<typeof ExecutionStatus>;

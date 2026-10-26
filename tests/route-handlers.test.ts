@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { Keypair } from "@solana/web3.js";
 import { insertToken, seedHolder } from "./fixtures";
 import { getStore } from "../src/server/runtime";
 import { GET as health } from "../app/api/health/route";
@@ -82,7 +83,8 @@ describe("method-specific route handlers", () => {
       rewardWallet: wallet,
       creatorWallet: wallet,
     });
-    seedHolder(store, token.id, wallet);
+    const holderWallet = Keypair.generate().publicKey.toBase58();
+    seedHolder(store, token.id, holderWallet);
 
     const listing = await body(tokens());
     expect((listing.tokens as { mint: string }[]).map((x) => x.mint)).toContain(
@@ -103,11 +105,16 @@ describe("method-specific route handlers", () => {
     expect(metadata.name).toBe("Example");
     expect(metadata.description).toBe("Official description");
     const chance = await body(
-      holderChance(url(`/api/tokens/${wallet}/chance?wallet=${wallet}`)),
+      holderChance(url(`/api/tokens/${wallet}/chance?wallet=${holderWallet}`)),
     );
     expect(chance.balance).toBe(25);
     expect(chance.gravity).toBe(100);
     expect(chance.probability).toBe(1);
+    store.repo.holders.syncBalance({ tokenId: token.id, wallet: holderWallet, balanceRaw: "0", slot: 2, observedAt: Date.now() + 1 });
+    const sold = await body(holderChance(url(`/api/tokens/${wallet}/chance?wallet=${holderWallet}`)));
+    expect(sold.balance).toBe(0);
+    expect(sold.gravity).toBe(100);
+    expect(sold.probability).toBe(1);
     const status = await body(await launchStatus(url(`/api/launches/${token.handle}`)));
     expect(status.handle).toBe(token.handle);
     expect(status).not.toHaveProperty("id");

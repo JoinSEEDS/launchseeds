@@ -125,6 +125,17 @@ export function requireAdmin(request: Request): void {
     throw new AdminHttpError("Authentication required", 401);
 }
 
+/** Admin API key for scripts and tools outside the browser (`[launchseeds] admin_api_key`,
+ * at least 32 characters): `Authorization: Bearer <key>`. Unset disables key access. */
+export function hasAdminApiKey(
+  request: Request,
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const key = environment.LAUNCHSEEDS_ADMIN_API_KEY ?? "";
+  const given = request.headers.get("authorization")?.match(/^Bearer (\S{1,256})$/)?.[1];
+  return environment.LAUNCHSEEDS_ADMIN_ENABLED === "true" && key.length >= 32 && !!given && secureComparison(given, key);
+}
+
 export function isAdmin(request: Request): boolean {
   return verifySession(cookieValue(request));
 }

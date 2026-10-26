@@ -1,3 +1,4 @@
+import "../src/server/rpc-pacing-install";
 import { createLaunchseedsCoreServices } from "../src/services";
 import { createSolardIntegrations } from "../src/integrations/solard";
 import { ed25519VoteVerifier } from "../src/integrations/ed25519";
@@ -14,7 +15,17 @@ import { SolardSource, SolardLaunchProvider } from "../src/server/solard";
 import type { TradeListener } from "../src/server/solard-sdk";
 import { LaunchService } from "../src/server/launch";
 import { runCycle } from "../src/server/worker";
+import {runLaunchCycle,startLaunchLoop} from "../src/server/launch-loop";
+import {watchLaunchWake} from "../src/server/launch-wake";
 import { getWorkerHealth } from "../src/server/launch-health";
+import { feeClaimsEnabled } from "../src/server/fee-claimer";
+import { createFeeClaimer } from "../src/server/fee-claimer-runtime";
+import { packExecutionsEnabled } from "../src/server/pack-executor";
+import { createPackExecutor } from "../src/server/pack-executor-runtime";
+import { stockExecutionsEnabled } from "../src/server/stock-executor";
+import { createStockExecutor } from "../src/server/stock-executor-runtime";
+import { marketMakingEnabled } from "../src/server/market-maker";
+import { createMarketMaker } from "../src/server/market-maker-runtime";
 import { solToLamports } from "../src/shared/domain";
 if (process.env.LAUNCHSEEDS_WORKER_ENABLED !== "true")
   throw new Error(
@@ -60,7 +71,10 @@ heartbeat.unref();
 let running = true;
 let listener: TradeListener | undefined;
 let source: SolardSource | undefined;
+let rewardsSource: SolardSource | undefined;
 let launchProvider: SolardLaunchProvider | undefined;
+let fastLaunch: ReturnType<typeof startLaunchLoop> | undefined;
+let closeLaunchWake: (()=>void) | undefined;
 try {
   source = await SolardSource.create(rpcUrl);
   let launch: LaunchService | undefined;
@@ -89,10 +103,26 @@ try {
     await services.holders.syncSnapshot(token.id);
   };
   const mints = () => store.listLive().map((token) => token.mint);
+  // Off unless [launchseeds] fee_claims = true (and live operations are on).
+  rewardsSource = feeClaimsEnabled() || packExecutionsEnabled() || stockExecutionsEnabled() || marketMakingEnabled() ? await SolardSource.createTrader(rpcUrl) : undefined;
+  const fees = feeClaimsEnabled() ? createFeeClaimer(store, rewardsSource!) : undefined;
+  if (fees) console.log("Fee claims enabled");
+  // Off unless [launchseeds] pack_executions = true: buys and opens packs with treasury funds.
+  const packs = packExecutionsEnabled() ? createPackExecutor(store, rewardsSource!, rpcUrl) : undefined;
+  if (packs) console.log("Pack executions enabled");
+  // Off unless [launchseeds] stock_executions = true: buys stock (e.g. GLDx) and sends wins.
+  const stocks = stockExecutionsEnabled() ? createStockExecutor(store, rewardsSource!, rpcUrl) : undefined;
+  if (stocks) console.log("Stock executions enabled");
+  // Off unless [launchseeds] market_making = true: trades holder-reward coins' market-making wallets.
+  const market = marketMakingEnabled() ? createMarketMaker(store, rewardsSource!, rpcUrl) : undefined;
+  if (market) console.log("Market making enabled");
   const once = process.argv.includes("--once");
   // Trade events only speed up holder refreshes; the minute cycle still syncs
-  // snapshots and Gravity. An RPC rejecting WebSockets must not stop the worker.
+  // snapshots and Gravity. Off by default: the WebSocket log subscription burned
+  // RPC quota, and polling alone stays inside the paced HTTP budget.
+  const tradeListener = process.env.LAUNCHSEEDS_TRADE_LISTENER === "true";
   const syncListener = async () => {
+    if (!tradeListener) return;
     try {
       if (!listener) {
         listener = await source!.listen(mints(), refresh);
@@ -112,6 +142,19 @@ try {
       );
     }
   };
+  if (!once && launch) {
+    const service = launch;
+    fastLaunch = startLaunchLoop({
+      cycle: () => runLaunchCycle({store,launch:service}),
+      onStart: () => { health.startCycle(workerId); },
+      onFinish: result => {
+        health.finishCycle(workerId,result.errors.length===0,result.errors.map(e=>e.operation).join(","));
+        if(result.errors.length)console.error(JSON.stringify(result.errors));
+      },
+      onError: () => { health.finishCycle(workerId,false,"launch cycle"); },
+    });
+    closeLaunchWake=watchLaunchWake(fastLaunch.wake);
+  }
   if (!once) await syncListener();
   process.on("SIGINT", () => {
     running = false;
@@ -120,13 +163,17 @@ try {
     running = false;
   });
   do {
-    health.startCycle(workerId);
+    if (!fastLaunch) health.startCycle(workerId);
     const result = await runCycle({
       store,
       services,
-      launch,
+      launch: once ? launch : undefined,
+      fees,
+      packs,
+      stocks,
+      market,
     });
-    health.finishCycle(
+    if (!fastLaunch) health.finishCycle(
       workerId,
       Boolean(launch) && result.errors.length === 0,
       result.errors
@@ -145,10 +192,13 @@ try {
     }
   } while (running);
 } finally {
+  closeLaunchWake?.();
+  await fastLaunch?.stop();
   clearInterval(heartbeat);
   health.stop(workerId);
   await listener?.close();
   source?.close();
+  rewardsSource?.close();
   launchProvider?.close();
   store.close();
   closeSync(lock);

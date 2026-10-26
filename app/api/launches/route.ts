@@ -1,4 +1,5 @@
-import { normalizeStrategy, DESCRIPTION } from "../../../lib/strategy";
+import {notifyLaunchWorker} from "../../../src/server/launch-wake";
+import { normalizeStrategy, assertStrategyAllowed, DESCRIPTION } from "../../../lib/strategy";
 import { saveFirstStrategy } from "../../../lib/governance";
 import {
   ApiError,
@@ -54,10 +55,11 @@ export async function POST(request: Request): Promise<Response> {
     }
     try {
       firstStrategy = await normalizeStrategy(payload.firstStrategy);
+      assertStrategyAllowed(firstStrategy, settings.holderRewards);
     } catch (error) {
       if (
         error instanceof Error &&
-        /amount|strategy|stock|pack|address|handle|mode|account|recipient/i.test(
+        /amount|strategy|stock|pack|address|handle|mode|account|recipient|market|holder|spread|position|profit/i.test(
           error.message,
         )
       ) {
@@ -80,6 +82,7 @@ export async function POST(request: Request): Promise<Response> {
       (tokenId) => saveFirstStrategy(tokenId, firstStrategy),
       settings,
     );
+    notifyLaunchWorker();
     return apiJson(status, 201);
   } catch (error) {
     return publicRouteError(error);

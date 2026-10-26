@@ -1,5 +1,5 @@
 import { ApiError, requireSameOrigin, readBoundedJson } from "../../../../lib/api-security";
-import { normalizeStrategy, DESCRIPTION } from "../../../../lib/strategy";
+import { normalizeStrategy, DESCRIPTION, assertStrategyAllowed } from "../../../../lib/strategy";
 import { persistConfig } from "../../../../lib/governance";
 import { parseLaunchSettings } from "../../../../src/domain/launch-settings";
 import { getOperationalLaunchReadiness } from "../../../../src/server/launch-health";
@@ -38,7 +38,9 @@ export async function PATCH(request: Request): Promise<Response> {
     let firstStrategy;
     try {
       settings = parseLaunchSettings(payload.settings);
-      firstStrategy = persistConfig(await normalizeStrategy(payload.firstStrategy));
+      const proposed = await normalizeStrategy(payload.firstStrategy);
+      assertStrategyAllowed(proposed, settings.holderRewards);
+      firstStrategy = persistConfig(proposed);
     } catch (error) {
       throw new ApiError(error instanceof Error ? error.message : "Invalid launch choices", 400);
     }

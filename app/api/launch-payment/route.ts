@@ -58,7 +58,8 @@ export async function POST(request: Request): Promise<Response> {
     const endpoint = process.env.SOLANA_RPC_URL;
     if (!endpoint)
       throw new ApiError("Launch payment is temporarily unavailable.", 503);
-    const connection = new Connection(endpoint, "confirmed");
+    const { createRpcConnection } = await import("../../../src/server/rpc-pacing");
+    const connection = createRpcConnection(endpoint, "confirmed");
     const { blockhash, lastValidBlockHeight } =
       await connection.getLatestBlockhash("confirmed");
     return apiJson(

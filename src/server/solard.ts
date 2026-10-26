@@ -1,13 +1,16 @@
 import { ApiError } from "../../lib/api-security";
 import { uploadedImagePath } from "../integrations/metadata";
 import { loadMetadataUploader, type MetadataUploader } from "./solard-sdk";
-import { loadSolard, type SolardClient, type TraderClient } from "./solard-sdk";
+import { loadSolard, loadWireTransaction, type SolardClient, type TraderClient } from "./solard-sdk";
 import { Connection, Keypair, PublicKey, SystemProgram, VersionedTransaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import { createMeasure } from "measure-fn";
 import { safeInteger, positive } from "../shared/domain";
 import type { LaunchProvider } from "./launch";
 import { Store } from "./store";
+import { createRpcConnection, rpcFetch } from "./rpc-pacing";
+import { lastKnownSolUsd, rememberSolUsd } from "./sol-price";
+import { holderRewardLaunchInstructions, marketMakerWalletName } from "./holder-reward-launch";
 const { measure } = createMeasure("launchseeds:solard");
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const WSOL = "So11111111111111111111111111111111111111112";
@@ -20,6 +23,13 @@ const SOL_USD_SOURCES: Array<[string, (data: any) => unknown]> = [
   ["https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd", (d) => d?.solana?.usd],
 ];
 export async function solUsd(): Promise<number> {
+  const fresh = lastKnownSolUsd(60_000);
+  if (fresh) return fresh;
+  const value = await fetchSolUsd();
+  rememberSolUsd(value);
+  return value;
+}
+async function fetchSolUsd(): Promise<number> {
   const failures: string[] = [];
   for (const [url, pick] of SOL_USD_SOURCES) {
     try {
@@ -41,9 +51,15 @@ export class SolardSource {
     return new SolardSource(
       sdk.createSolard({
         rpcUrl,
+        rpcUrls: [rpcUrl],
         dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite",
       }),
     );
+  }
+  static async createTrader(rpcUrl: string) {
+    const sdk = (await loadSolard()).createTraderSolard({ rpcUrl, rpcUrls: [rpcUrl], dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite" });
+    if (typeof sdk.signer !== "function" || !sdk.claims?.creatorFees || typeof sdk.buy !== "function") throw new Error("Solard trading capabilities unavailable");
+    return new SolardSource(sdk as unknown as SolardClient);
   }
   async priceUsd(mint: string): Promise<string> {
     await this.sdk.addToken(mint);
@@ -73,6 +89,38 @@ export class SolardSource {
       else if (group.quoteMint === USDC) usd += amount;
     }
     return Math.round(usd * 1e6);
+  }
+  /** SOL-quoted creator fees waiting for `wallet` (a Solard wallet name), in lamports. */
+  async claimableLamports(wallet: string, mint: string): Promise<bigint> {
+    const { groups } = await this.sdk.getClaimableCreatorFees(wallet, { tokens: [mint] });
+    return groups.filter((g) => g.quoteMint === WSOL).reduce((sum, g) => sum + BigInt(g.amountRaw), 0n);
+  }
+  /** Durable creator-fee claim signed by the named Solard wallet. The same `id`
+   * resumes the same claim; payouts are measured from the confirmed transaction. */
+  async claimCreatorFees(wallet: string, mint: string, id: string) {
+    const trader = this.sdk as unknown as TraderClient;
+    const connection = createRpcConnection(process.env.SOLANA_RPC_URL!, "finalized");
+    if (await connection.getBalance(trader.signer(wallet).publicKey, "confirmed") < 10_000)
+      throw new Error("Treasury needs SOL for the initial claim network fee");
+    const result = await trader.claims.creatorFees.claim(mint, wallet, { id });
+    if (result.receipt.status !== "confirmed")
+      throw new Error(`Claim ${result.claimSignature} is ${result.receipt.status}; will resume`);
+    const status = (await connection.getSignatureStatuses([result.claimSignature], { searchTransactionHistory: true })).value[0];
+    if (status?.err) throw new Error(`Claim ${result.claimSignature} failed on-chain`);
+    if (status?.confirmationStatus !== "finalized") throw new Error(`Claim ${result.claimSignature} awaiting finality; will resume`);
+    const quote = result.quoteAsset as { kind: string; mint?: unknown };
+    return {
+      signature: result.claimSignature,
+      quoteIsSol: quote.kind === "native-sol" || String(quote.mint ?? "") === WSOL,
+      payouts: result.payouts.map((p) => ({ address: p.address, amountRaw: BigInt(p.amountRaw) })),
+      blockTimeMs: null,
+    };
+  }
+  /** Address of a named Solard wallet, created on first use. */
+  walletAddress(name: string): string {
+    const trader = this.sdk as unknown as TraderClient;
+    const existing = trader.listWallets().find((w) => w.name === name);
+    return existing ? existing.address : trader.createWallet(name).address;
   }
   async listen(mints: string[], refresh: (mint: string) => Promise<void>) {
     const listener = await this.sdk.listenTrades({
@@ -110,7 +158,7 @@ export class SolardLaunchProvider implements LaunchProvider {
   ) {
     safeInteger(baseLamports);
     positive(baseLamports);
-    this.connection = new Connection(rpcUrl, "finalized");
+    this.connection = createRpcConnection(rpcUrl, "finalized");
   }
   static async create(
     store: Store,
@@ -121,6 +169,7 @@ export class SolardLaunchProvider implements LaunchProvider {
     return new SolardLaunchProvider(
       sdk.createTraderSolard({
         rpcUrl,
+        rpcUrls: [rpcUrl],
         dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite",
       }),
       store,
@@ -245,6 +294,17 @@ export class SolardLaunchProvider implements LaunchProvider {
       new PublicKey(fundingWallet), "confirmed",
     )) > 0;
   }
+  async fundedWallets(wallets: string[]): Promise<Set<string>> {
+    return measure("Observe pending launch balances", async () => {
+      const funded = new Set<string>();
+      for (let offset = 0; offset < wallets.length; offset += 100) {
+        const batch = wallets.slice(offset, offset + 100);
+        const accounts = await this.connection.getMultipleAccountsInfo(batch.map(wallet => new PublicKey(wallet)), "confirmed");
+        accounts.forEach((account, index) => { if (account && account.lamports > 0) funded.add(batch[index]!); });
+      }
+      return funded;
+    });
+  }
   async deposits(_tokenId: number, fundingWallet: string) {
     const signatures = await this.connection.getSignaturesForAddress(
       new PublicKey(fundingWallet),
@@ -292,10 +352,12 @@ export class SolardLaunchProvider implements LaunchProvider {
     symbol: string;
     devBuyLamports: number;
     mintSignerRef: string | null;
+    holderRewards?: boolean;
   }) {
     // Launches created before CA naming have no mint keypair yet.
     const mintSignerRef = input.mintSignerRef || this.createMint().mintSignerRef;
     const mintWallet = { address: this.walletAddress(mintSignerRef) };
+    if (input.holderRewards) return this.prepareHolderRewardDeployment(input, mintSignerRef, mintWallet.address);
     const deployment = await this.sdk.prepareTokenDeployment(
       "pump",
       input.fundingWallet,
@@ -329,6 +391,65 @@ export class SolardLaunchProvider implements LaunchProvider {
       mintSignerRef,
     };
   }
+  /** Holder-reward coin, created and first bought by its public market-making wallet. */
+  private async prepareHolderRewardDeployment(
+    input: { fundingWallet: string; metadataUri: string; name: string; symbol: string; devBuyLamports: number },
+    mintSignerRef: string,
+    mint: string,
+  ) {
+    // `fundingWallet` is the funding wallet's address (a Solard wallet ref).
+    const fundingAddress = input.fundingWallet;
+    const marketMaker = this.findOrCreateWallet(marketMakerWalletName(mint)).address;
+    const { instructions } = await holderRewardLaunchInstructions({
+      connection: this.connection,
+      mint: new PublicKey(mint),
+      name: input.name,
+      symbol: input.symbol,
+      uri: input.metadataUri,
+      fundingWallet: new PublicKey(fundingAddress),
+      marketMaker: new PublicKey(marketMaker),
+      buyLamports: input.devBuyLamports,
+    });
+    // A v1 transaction (up to 4096 bytes) fits the launch without a lookup table.
+    const { buildV1Transaction } = await loadWireTransaction();
+    const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash("confirmed");
+    const transaction = await buildV1Transaction(
+      new PublicKey(fundingAddress),
+      { instructions, signers: [], actions: [], trackedAccounts: [], cuLimit: 400_000 },
+      blockhash,
+      lastValidBlockHeight,
+    );
+    await transaction.sign([this.sdk.signer(fundingAddress), this.sdk.signer(marketMaker), this.sdk.signer(mint)], lastValidBlockHeight);
+    const bytes = transaction.serialize();
+    const simulation = await this.simulateWire(bytes);
+    if (simulation) throw new Error(`Holder-reward launch simulation failed: ${simulation}`);
+    return {
+      intent: JSON.stringify({
+        transaction: Buffer.from(bytes).toString("base64"),
+        signature: bs58.encode(transaction.signatures[0]!),
+        mint,
+        lastValidBlockHeight,
+      }),
+      mintSignerRef,
+      marketMaker,
+    };
+  }
+  /** Signed simulation of raw transaction bytes (any wire version); the error, or null. */
+  private async simulateWire(bytes: Uint8Array): Promise<string | null> {
+    const response = await rpcFetch(this.rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "simulateTransaction",
+        params: [Buffer.from(bytes).toString("base64"), { encoding: "base64", sigVerify: true, commitment: "confirmed" }],
+      }),
+    });
+    const body = (await response.json()) as { error?: { message?: string }; result?: { value?: { err: unknown; logs?: string[] } } };
+    if (body.error) return body.error.message ?? "RPC error";
+    const value = body.result?.value;
+    if (!value) return "No simulation result";
+    return value.err ? `${JSON.stringify(value.err)} ${(value.logs ?? []).slice(-3).join(" | ")}` : null;
+  }
   async executeDeployment(intent: string) {
     const plan = JSON.parse(intent) as {
       transaction: string;
@@ -336,7 +457,7 @@ export class SolardLaunchProvider implements LaunchProvider {
       mint: string;
       lastValidBlockHeight: number;
     };
-    const transaction = VersionedTransaction.deserialize(
+    const transaction = (await loadWireTransaction()).deserializeWireTransaction(
       Buffer.from(plan.transaction, "base64"),
     );
     if (bs58.encode(transaction.signatures[0]!) !== plan.signature)

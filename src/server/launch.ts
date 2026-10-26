@@ -1,7 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DESCRIPTION } from "../../lib/strategy";
 import { ApiError } from "../../lib/api-security";
-import { DEFAULT_LAUNCH_SETTINGS, canonicalLaunchSettings, storedLaunchSettings, type LaunchSettings } from "../domain/launch-settings";
+import { DEFAULT_LAUNCH_SETTINGS, DEFAULT_SELL_PLAN, canonicalLaunchSettings, storedLaunchSettings, type LaunchSettings } from "../domain/launch-settings";
+import { marketMakerWalletName } from "./holder-reward-launch";
 import { Store, safeNumber } from "./store";
 import { canonicalStrategy } from "../domain/strategies";
 import type { StrategyConfigValue, Token } from "../db/schema";
@@ -13,6 +14,8 @@ import {
   type LaunchInput,
 } from "../shared/domain";
 export interface LaunchProvider {
+  /** Balance hints only; deposit history remains authoritative for funding. */
+  fundedWallets?(wallets: string[]): Promise<Set<string>>;
   /** Generates and stores the token's mint keypair; the CA stays private until deployed. */
   createMint(): { mintSignerRef: string; mint: string };
   prepare(input: {
@@ -58,7 +61,9 @@ export interface LaunchProvider {
     symbol: string;
     devBuyLamports: number;
     mintSignerRef: string | null;
-  }): Promise<{ intent: string; mintSignerRef: string }>;
+    /** Pump holder-reward coin with the launch buy from a public market-making wallet. */
+    holderRewards?: boolean;
+  }): Promise<{ intent: string; mintSignerRef: string; marketMaker?: string }>;
   executeDeployment(intent: string): Promise<{
     status: "pending" | "confirmed" | "expired";
     signature: string;
@@ -97,7 +102,12 @@ export class LaunchService {
     const input = launchInput.parse({ ...raw, description: DESCRIPTION });
     if (!/^[a-f0-9]{64}$/.test(capability))
       throw new Error("Invalid launch key");
+    // A holder-reward coin always has a public sell plan; the default ladder if none was chosen.
+    if (settings.holderRewards && !settings.sellPlan.length) settings = { ...settings, sellPlan: [...DEFAULT_SELL_PLAN] };
     const launchSettingsJson = canonicalLaunchSettings(settings);
+    // The market maker's launch buy is the dev buy: a holder-reward coin needs one.
+    if (settings.holderRewards && !(solToLamports(input.devBuySol) > 0))
+      throw new Error("Holder-reward launches need a launch buy for the market maker");
     const accessHash = hash(capability),
       requestHash = hash(JSON.stringify({ input, settingsJson: launchSettingsJson }));
     const existingId = this.existing(accessHash, requestHash);
@@ -373,13 +383,43 @@ export class LaunchService {
   }
   async process(tokenId: number) {
     if (!this.provider) throw new Error("Launch service is not configured");
+    const leaseId = randomUUID();
+    const acquired = this.store.repo.tx(tx => {
+      const current = tx.tokens.get(tokenId);
+      if (!current || !["funding", "deploying"].includes(current.status) || current.leaseUntil > Date.now()) return false;
+      tx.tokens.updateLaunch(tokenId, { leaseId, leaseUntil: Date.now() + LaunchService.PREPARATION_LEASE_MS });
+      return true;
+    });
+    if (!acquired) return;
+    const assertLease = () => {
+      const current = this.store.repo.tokens.get(tokenId);
+      if (current?.leaseId !== leaseId || current.leaseUntil <= Date.now()) throw new Error("Launch processing lease lost; reconcile persisted intent");
+    };
+    const heartbeat = setInterval(() => {
+      const current = this.store.repo.tokens.get(tokenId);
+      if (current?.leaseId === leaseId && current.leaseUntil > Date.now())
+        this.store.repo.tokens.updateLaunch(tokenId, { leaseUntil: Date.now() + LaunchService.PREPARATION_LEASE_MS });
+    }, 10_000);
+    heartbeat.unref();
+    try { await this.processLeased(tokenId, assertLease); }
+    finally {
+      clearInterval(heartbeat);
+      this.store.repo.tx(tx => {
+        if (tx.tokens.get(tokenId)?.leaseId === leaseId)
+          tx.tokens.updateLaunch(tokenId, { leaseId: "", leaseUntil: 0 });
+      });
+    }
+  }
+  private async processLeased(tokenId: number, assertLease: () => void) {
+    const provider = this.provider!;
+    assertLease();
     let token = this.store.repo.tokens.get(tokenId);
     if (!token) throw new Error("Not found");
-    if (token.leaseUntil > Date.now()) return;
     if (!["funding", "deploying"].includes(token.status)) return;
     if (token.status === "funding") {
       const { fundingWallet } = preparedWallets(token);
-      const deposits = await this.provider.deposits(tokenId, fundingWallet);
+      const deposits = await provider.deposits(tokenId, fundingWallet);
+      assertLease();
       this.store.repo.tx((tx) => {
         for (const d of deposits) {
           safeInteger(d.lamports);
@@ -401,7 +441,7 @@ export class LaunchService {
         BigInt(token.fundingReceivedLamports) < BigInt(token.requiredLamports)
       )
         return;
-      const prepared = await this.provider.prepareDeployment({
+      const prepared = await provider.prepareDeployment({
         tokenId,
         fundingWallet,
         metadataUri: token.metadataUri!,
@@ -409,36 +449,55 @@ export class LaunchService {
         symbol: token.symbol,
         devBuyLamports: safeNumber(token.devBuyLamports),
         mintSignerRef: token.mintSignerRef,
+        holderRewards: storedLaunchSettings(token.launchSettingsJson).holderRewards,
       });
+      assertLease();
       this.store.repo.tx((tx) => {
         const current = tx.tokens.get(tokenId)!;
         if (current.status !== "funding") return;
         tx.tokens.updateLaunch(tokenId, { intent: prepared.intent });
         tx.tokens.update(tokenId, { mintSignerRef: prepared.mintSignerRef });
+        // The public market-making wallet receives the launch buy.
+        if (prepared.marketMaker) tx.tokens.assignMarketMaker(tokenId, prepared.marketMaker);
         tx.tokens.transition(tokenId, "funding", "deploying");
       });
     }
     const intent = this.store.repo.tokens.get(tokenId)?.intent;
     if (!intent) throw new Error("Missing persisted launch intent");
-    let result = await this.provider.executeDeployment(intent);
+    assertLease();
+    let result = await provider.executeDeployment(intent);
+    assertLease();
     if (result.status === "expired") {
-      if (!this.provider.refreshDeployment)
+      if (!provider.refreshDeployment)
         throw new Error("Launch intent expired; reconciliation required");
-      const replacement = await this.provider.refreshDeployment(intent);
+      const replacement = await provider.refreshDeployment(intent);
+      assertLease();
       const stored = this.store.repo.tx((tx) => {
         const current = tx.tokens.get(tokenId);
         if (current?.status !== "deploying" || current.intent !== intent) return false;
         tx.tokens.updateLaunch(tokenId, { intent: replacement, error: null });
+        tx.tokens.update(tokenId, { deploySignature: null });
         return true;
       });
       if (!stored) return;
-      result = await this.provider.executeDeployment(replacement);
+      result = await provider.executeDeployment(replacement);
+      assertLease();
     }
+    if (result.status === "pending")
+      this.store.repo.tokens.update(tokenId, { deploySignature: result.signature });
     if (result.status === "confirmed")
-      this.store.repo.tokens.transition(tokenId, "deploying", "live", {
-        mint: result.mint,
-        deploySignature: result.signature,
-        launchedAt: Date.now(),
+      this.store.repo.tx((tx) => {
+        if (!tx.tokens.transition(tokenId, "deploying", "live", {
+          mint: result.mint,
+          deploySignature: result.signature,
+          launchedAt: Date.now(),
+        }))
+          return;
+        // A holder-reward coin's treasury is its public market-making wallet: the
+        // fixed sell plan's profit is spent from there on the coin's strategy.
+        const live = tx.tokens.get(tokenId)!;
+        if (storedLaunchSettings(live.launchSettingsJson).holderRewards && live.devBuyRecipient)
+          tx.tokens.adoptMarketMakerTreasury(tokenId, { rewardWallet: live.devBuyRecipient, fundingWalletName: marketMakerWalletName(result.mint) });
       });
   }
 }

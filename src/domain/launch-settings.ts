@@ -25,6 +25,29 @@ export const LiquiditySettingsSchema = z.object({
   message: "The range must start below where it ends.", path: ["maxMcapUsd"],
 });
 
+/** One point of a holder-reward coin's public sell plan: when the market cap
+ * first reaches `marketCapUsd`, the market maker sells `percent` of its launch
+ * position. Each point sells once. */
+export const SellPointSchema = z.object({
+  marketCapUsd: z.number().int().min(1_000).max(1_000_000_000),
+  percent: z.number().int().min(1).max(100),
+}).strict();
+export const SellPlanSchema = z.array(SellPointSchema).max(10).refine(
+  (plan) => plan.every((p, i) => i === 0 || p.marketCapUsd > plan[i - 1]!.marketCapUsd),
+  { message: "Sell points must rise in market cap." },
+).refine((plan) => plan.reduce((sum, p) => sum + p.percent, 0) <= 100, {
+  message: "A sell plan cannot sell more than 100% of the launch position.",
+});
+export type SellPoint = z.infer<typeof SellPointSchema>;
+/** 20% of the launch position at each of five market caps. */
+export const DEFAULT_SELL_PLAN: readonly SellPoint[] = Object.freeze([
+  { marketCapUsd: 100_000, percent: 20 },
+  { marketCapUsd: 250_000, percent: 20 },
+  { marketCapUsd: 500_000, percent: 20 },
+  { marketCapUsd: 1_000_000, percent: 20 },
+  { marketCapUsd: 2_500_000, percent: 20 },
+]);
+
 export const LaunchSettingsSchema = z.object({
   firstStrategyLockMs: z.union([
     z.literal(0), z.literal(3_600_000), z.literal(86_400_000), z.literal(604_800_000),
@@ -36,6 +59,12 @@ export const LaunchSettingsSchema = z.object({
   sniperSeconds: oneOf(SNIPER_SECONDS).nullable(),
   /** null = no concentrated liquidity. */
   liquidity: LiquiditySettingsSchema.nullable(),
+  /** Pump holder-reward coin: creator fees go to holders through Pump, and the
+   * launch buy comes from a public, labelled market-making wallet that holders
+   * govern (see market-maker.ts). Stored launches without it are false. */
+  holderRewards: z.boolean().default(false),
+  /** Holder-reward coins: the market maker's fixed, public sell plan (see SellPointSchema). */
+  sellPlan: SellPlanSchema.default([]),
 }).strict();
 
 export type LaunchSettings = z.infer<typeof LaunchSettingsSchema>;
@@ -43,7 +72,10 @@ export const DEFAULT_LAUNCH_SETTINGS: LaunchSettings = Object.freeze({
   firstStrategyLockMs: 86_400_000,
   minimumActiveMs: 3_600_000,
   sniperSeconds: 30,
-  liquidity: Object.freeze({ feeShare: 25, minMcapUsd: 100_000, maxMcapUsd: 1_000_000 }),
+  // Off until concentrated liquidity exists (LIQUIDITY_AVAILABLE).
+  liquidity: null,
+  holderRewards: false,
+  sellPlan: [],
 });
 
 /** Existing tokens without this feature keep their original three-minute governance rule. */
@@ -52,6 +84,8 @@ export const UNSPECIFIED_LAUNCH_SETTINGS: LaunchSettings = Object.freeze({
   minimumActiveMs: 180_000,
   sniperSeconds: null,
   liquidity: null,
+  holderRewards: false,
+  sellPlan: [],
 });
 
 export function parseLaunchSettings(value: unknown): LaunchSettings {
@@ -68,9 +102,13 @@ export function canonicalLaunchSettings(value: unknown): string {
   return JSON.stringify(parseLaunchSettings(value));
 }
 
-/** Percent of trading fees reserved for liquidity (0 when off). */
+/** Concentrated liquidity is not built yet. Until it is, no fees are set aside
+ * for it, whatever a token's stored settings say: holders get the full remainder. */
+export const LIQUIDITY_AVAILABLE = false;
+
+/** Percent of trading fees reserved for liquidity (0 when off or unavailable). */
 export function liquidityShare(settings: LaunchSettings): number {
-  return settings.liquidity?.feeShare ?? 0;
+  return LIQUIDITY_AVAILABLE ? settings.liquidity?.feeShare ?? 0 : 0;
 }
 
 /** One-dollar fee decomposition: $TOKEN first, liquidity next, the remainder to rewards. */

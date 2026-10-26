@@ -4,10 +4,16 @@ import { ed25519VoteVerifier } from "../integrations/ed25519";
 import { Store } from "./store";
 import { openLaunchseedsData } from "../db";
 import { LaunchService } from "./launch";
-import { SolardLaunchProvider } from "./solard";
+import { SolardLaunchProvider, SolardSource } from "./solard";
 import { solToLamports } from "../shared/domain";
 import { FreeLaunchService } from "./free-launch";
 let instance: Store | undefined;
+let trading: Promise<SolardSource> | undefined;
+/** Signing client is separate from page read clients and created only for live actions. */
+export function getTradingSolard() {
+  if (process.env.LAUNCHSEEDS_LIVE_OPERATIONS !== "true") throw new Error("Live operations disabled");
+  return trading ??= SolardSource.createTrader(process.env.SOLANA_RPC_URL || "").catch((error) => { trading = undefined; throw error; });
+}
 export const getStore = () =>
   (instance ??= new Store(
     openLaunchseedsData(process.env.LAUNCHSEEDS_DB_PATH || "./data/launchseeds-v3.sqlite"),

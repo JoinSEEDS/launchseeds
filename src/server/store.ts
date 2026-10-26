@@ -1,3 +1,4 @@
+import { lastKnownSolUsd } from "./sol-price";
 import { createLaunchseedsCoreServices } from "../services";
 import { humanToRaw } from "../domain/holders";
 import { ed25519VoteVerifier } from "../integrations/ed25519";
@@ -29,10 +30,21 @@ export class Store {
     const state = this.repo.operations.state(token.id);
     const treasury = this.repo.treasuries.getByOwner(token.id, "USDC");
     // Existing UI labels USD evidence. Never present SOL atomic balances as USDC.
-    const totals = treasury
+    const usdc = treasury
       ? this.repo.ledger.totals(treasury.id)
       : { collected: 0n, spent: 0n };
-    const reserved = treasury ? safeNumber(treasury.reservedAtomic) : 0;
+    // Claimed creator fees sit in the SOL treasury; shown in USD at the last
+    // known SOL price (none known yet: not counted rather than guessed).
+    const solTreasury = this.repo.treasuries.getByOwner(token.id, "SOL");
+    const price = solTreasury ? lastKnownSolUsd() : null;
+    const solTotals = solTreasury && price ? this.repo.ledger.totals(solTreasury.id) : { collected: 0n, spent: 0n };
+    const lamportsToMicros = (lamports: bigint) => (lamports * BigInt(Math.round(price! * 1e6))) / 1_000_000_000n;
+    const totals = price
+      ? { collected: usdc.collected + lamportsToMicros(solTotals.collected), spent: usdc.spent + lamportsToMicros(solTotals.spent) }
+      : usdc;
+    const reserved =
+      (treasury ? safeNumber(treasury.reservedAtomic) : 0) +
+      (solTreasury && price ? safeNumber(lamportsToMicros(BigInt(solTreasury.reservedAtomic))) : 0);
     return {
       ...token,
       mint: token.mint || "",

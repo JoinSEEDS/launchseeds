@@ -11,6 +11,7 @@ import {
   SNIPER_SECONDS,
   MARKET_CAP_STOPS,
   MAX_LIQUIDITY_SHARE,
+  LIQUIDITY_AVAILABLE,
   type LaunchSettings,
 } from "../../src/domain/launch-settings";
 import { createStrategyBuilder } from "../components/strategy-builder";
@@ -28,7 +29,7 @@ import {
 } from "../../lib/client-request";
 import { connectWallet, walletAddress } from "../../lib/wallet-session";
 import { sendWalletTransaction } from "../../lib/wallet-transaction";
-import { solveProof } from "../../lib/proof-of-work";
+import { createMiner, type MineFound, type MineProgress } from "../../lib/proof-of-work";
 import {
   buildLaunchPayload,
   launchUrl,
@@ -95,6 +96,7 @@ export default function mount() {
   const payButton = find<HTMLButtonElement>("pay-in-wallet");
   const errorBox = find<HTMLElement>("launch-error");
   const readiness = find<HTMLElement>("launch-ready-hint");
+  const recheck = find<HTMLButtonElement>("recheck-launch");
   const submit = find<HTMLButtonElement>("get-deposit");
   const actionWrap = find<HTMLElement>("submit-wrap");
   const previewRoot = find<HTMLElement>("launch-first-preview");
@@ -143,13 +145,14 @@ export default function mount() {
       firstStrategyLockMs: rules.firstStrategyLockMs,
       minimumActiveMs: rules.minimumActiveMs,
       sniperSeconds: isOn("pow") ? SNIPER_SECONDS[Number(powInput.value)] : null,
-      liquidity: isOn("liq")
+      liquidity: LIQUIDITY_AVAILABLE && isOn("liq")
         ? {
             feeShare: Number(shareInput.value),
             minMcapUsd: MARKET_CAP_STOPS[Number(lowInput.value)],
             maxMcapUsd: MARKET_CAP_STOPS[Number(highInput.value)],
           }
         : null,
+      holderRewards: isOn("holder"),
     });
   }
 
@@ -190,6 +193,7 @@ export default function mount() {
       ["Minimum active", durationText(settings.minimumActiveMs)],
       ["Sniper protection", sniperDescription(settings)],
       ["Liquidity", settings.liquidity ? `${settings.liquidity.feeShare}% · ${rangeText(settings)}` : "Off"],
+      ["Holder rewards", settings.holderRewards ? "On · public market making" : "Off"],
     ];
     render(
       <>{rows.map(([term, value]) => <><dt>{term}</dt><dd>{value}</dd></>)}</>,
@@ -250,6 +254,8 @@ export default function mount() {
     actionWrap.hidden = !view.showAction;
     readiness.hidden = !view.showUnavailable;
     readiness.textContent = view.message;
+    recheck.hidden = checking || config?.launchEnabled === true || !!prepared;
+    recheck.disabled = checking || busy;
     find<HTMLElement>("summary-fee").textContent = view.fee;
     find<HTMLElement>("summary-total").textContent = view.total;
   }
@@ -434,7 +440,9 @@ export default function mount() {
       launchView(status).canFund &&
       status.receivedLamports === 0 &&
       (status.devBuyLamports ?? 0) === 0;
-    if (!eligible && !freeRunning) {
+    if (!eligible) {
+      // Paid some other way while mining: stop and put the panel away.
+      if (puzzle && !mineFound) resetMine();
       freeButton.hidden = true;
       return;
     }
@@ -443,43 +451,152 @@ export default function mount() {
     });
   }
 
+  const mine = {
+    panel: find<HTMLElement>("mine"),
+    title: find<HTMLElement>("mine-title"),
+    sub: find<HTMLElement>("mine-sub"),
+    start: find<HTMLButtonElement>("mine-start"),
+    stop: find<HTMLButtonElement>("mine-stop"),
+    stats: find<HTMLElement>("mine-stats"),
+    rows: find<HTMLElement>("mine-rows"),
+    bar: find<HTMLElement>("mine-bar"),
+    work: find<HTMLElement>("mine-work"),
+    best: find<HTMLElement>("mine-best"),
+  };
+  let miner: ReturnType<typeof createMiner> | null = null;
+  let mineFound = false; // a proof was found: keep the panel showing the claim result
+  let puzzle: { challenge: string; bits: number; expiresAt: number; poolLamports: number | null } | null = null;
+  const freeAuth = () => ({ headers: { authorization: `Bearer ${capability}` }, timeoutMs: 20_000 });
+  const clock = (sec: number) => {
+    sec = Math.max(0, Math.round(sec));
+    return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+  };
+  const big = (n: number) =>
+    n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n);
+  const mineText = (title: string, sub: string, tone?: "ok" | "error") => {
+    mine.title.textContent = title;
+    mine.title.classList.toggle("is-ok", tone === "ok");
+    mine.title.classList.toggle("is-error", tone === "error");
+    mine.sub.textContent = sub;
+  };
+  const showMineDetail = (on: boolean) => {
+    for (const el of [mine.stats, mine.rows, mine.bar]) el.hidden = !on;
+  };
+  function resetMine() {
+    miner?.stop();
+    miner = null;
+    mineFound = false;
+    puzzle = null;
+    freeRunning = false;
+    mine.panel.hidden = true;
+    mine.start.hidden = false;
+    mine.start.disabled = false;
+    mine.start.textContent = "Start Mining";
+    mine.stop.hidden = true;
+    mine.best.classList.remove("is-ok");
+    mine.work.parentElement!.classList.remove("is-ok");
+    showMineDetail(false);
+  }
+
   freeButton.addEventListener("click", async () => {
     if (!prepared || !launchHandle || !capability || freeRunning) return;
     freeRunning = true;
     freeButton.classList.add("is-busy");
-    freeStatus.hidden = false;
+    freeStatus.hidden = true;
     freeStatus.classList.remove("is-error");
-    const auth = { headers: { authorization: `Bearer ${capability}` }, timeoutMs: 20_000 };
     try {
-      const puzzle = await postJson<{ challenge: string; bits: number; expiresAt: number }>(
-        "/api/free-launch",
-        { action: "challenge", handle: launchHandle },
-        auth,
-      );
-      const expected = 2 ** puzzle.bits;
-      freeButton.textContent = "Solving puzzle…";
-      const nonce = await solveProof(puzzle.challenge, puzzle.bits, (tried) => {
-        freeStatus.textContent = `Solving the free-launch puzzle… ${Math.min(99, Math.round((100 * tried) / expected))}%`;
-      });
-      freeStatus.textContent = "Solved. Sending your launch fee from the free-launch treasury…";
+      puzzle = await postJson("/api/free-launch", { action: "challenge", handle: launchHandle }, freeAuth());
+    } catch (error) {
+      freeRunning = false;
+      freeStatus.hidden = false;
+      freeStatus.classList.add("is-error");
+      freeStatus.textContent = error instanceof Error ? error.message : "Free launch is not available. You can still pay.";
+      return;
+    } finally {
+      freeButton.classList.remove("is-busy");
+    }
+    freeButton.hidden = true;
+    mine.panel.hidden = false;
+    mineText(
+      "Mine a free launch",
+      "Your browser hashes until it finds one below the target. Usually a few seconds on a laptop, longer on a phone, sooner if you're lucky. Up to 3 free launches per day.",
+    );
+    const zeros = Math.floor(puzzle!.bits / 4);
+    find<HTMLElement>("mine-target").textContent = "0".repeat(zeros) + "f".repeat(64 - zeros);
+    find<HTMLElement>("mine-pool").textContent =
+      puzzle!.poolLamports == null ? "—" : `${(puzzle!.poolLamports / 1e9).toFixed(2)} SOL`;
+    mine.start.focus();
+  });
+
+  mine.start.addEventListener("click", () => {
+    if (!puzzle) return;
+    if (puzzle.expiresAt <= Date.now()) {
+      resetMine();
+      freeButton.hidden = false;
+      freeStatus.hidden = false;
+      freeStatus.textContent = "The puzzle expired. Press Mine Free Launch to get a new one.";
+      return;
+    }
+    miner ??= createMiner({ seed: puzzle.challenge, bits: puzzle.bits }, { onProgress: progress, onFound: found });
+    showMineDetail(true);
+    mineText("Mining…", "Keep this tab open. You can still pay at any time.");
+    mine.start.hidden = true;
+    mine.stop.hidden = false;
+    miner.start();
+  });
+
+  mine.stop.addEventListener("click", () => {
+    miner?.stop();
+    mine.stop.hidden = true;
+    mine.start.hidden = false;
+    mine.start.textContent = "Resume";
+    mineText("Mining stopped", "Resume any time. Work done so far is kept.");
+    find<HTMLElement>("mine-speed").textContent = "—";
+  });
+
+  function progress(p: MineProgress) {
+    const expected = 2 ** puzzle!.bits;
+    const pct = Math.min(100, (p.hashes / expected) * 100);
+    find<HTMLElement>("mine-speed").textContent =
+      !p.speed ? "…" : p.speed >= 1e6 ? `${(p.speed / 1e6).toFixed(2)} MH/s` : `${Math.round(p.speed / 1e3)} kH/s`;
+    find<HTMLElement>("mine-hashes").textContent = big(p.hashes);
+    find<HTMLElement>("mine-time").textContent = clock(p.seconds);
+    find<HTMLElement>("mine-expected").textContent = p.speed ? `~${clock(expected / p.speed)}` : "…";
+    if (p.bestHex) mine.best.textContent = p.bestHex;
+    if (p.now) find<HTMLElement>("mine-now").textContent = p.now;
+    mine.work.style.width = `${pct.toFixed(1)}%`;
+    mine.work.parentElement!.setAttribute("aria-valuenow", String(Math.round(pct)));
+    find<HTMLElement>("mine-work-text").textContent = `${Math.round((p.hashes / expected) * 100)}% of expected work`;
+  }
+
+  async function found(f: MineFound) {
+    mineFound = true;
+    mine.stop.hidden = true;
+    mine.start.hidden = true;
+    mine.best.textContent = f.hash;
+    mine.best.classList.add("is-ok");
+    mine.work.style.width = "100%";
+    mine.work.parentElement!.classList.add("is-ok");
+    find<HTMLElement>("mine-work-text").textContent = `Found after ${big(f.hashes)} hashes in ${clock(f.seconds)}`;
+    mineText("Found it. Checking…", "Sending your answer to be verified.");
+    try {
       await postJson<{ signature: string }>(
         "/api/free-launch",
-        { action: "claim", handle: launchHandle, challenge: puzzle.challenge, nonce },
-        auth,
+        { action: "claim", handle: launchHandle, challenge: puzzle!.challenge, nonce: String(f.nonce) },
+        freeAuth(),
       );
-      freeStatus.textContent = "Free launch granted. Waiting for the network to confirm the payment.";
-      freeButton.hidden = true;
+      mineText("Found it. Your launch is free.", "The launch fee was sent from the free launch pool. Launching once the network confirms it.", "ok");
       payButton.hidden = true;
       void requestStatus().catch(() => {});
     } catch (error) {
-      freeStatus.textContent = error instanceof Error ? error.message : "Free launch failed. You can still pay.";
-      freeStatus.classList.add("is-error");
-      freeButton.textContent = "Free Launch";
-    } finally {
+      mineText("That answer was not accepted", error instanceof Error ? error.message : "Try again, or pay in wallet.", "error");
+      miner = null;
+      puzzle = null;
+      mineFound = false;
       freeRunning = false;
-      freeButton.classList.remove("is-busy");
+      freeButton.hidden = false;
     }
-  });
+  }
 
   /** The quote window. Payments after it are still detected and processed,
    * so the countdown simply disappears instead of claiming the address expired. */
@@ -534,6 +651,8 @@ export default function mount() {
       : view.phase === "deploying"
         ? 1
         : 0;
+    find<HTMLElement>("step-token").textContent = live ? "Token created"
+      : status.launchSignature ? "Confirming token" : "Creating token";
     visible.forEach((step, index) => {
       step.classList.toggle("is-done", index < completed);
       step.classList.toggle("is-current", index === completed && view.phase !== "failed");
@@ -564,7 +683,7 @@ export default function mount() {
     find<HTMLElement>("launch-busy").hidden = !view.waiting;
     find<HTMLElement>("launch-scan").hidden = !view.waiting;
     find<HTMLElement>("launch-busy-text").textContent =
-      view.canFund ? "Waiting for payment" : view.phase === "preparing" ? "Preparing" : "Launching";
+      view.canFund ? "Waiting for payment" : view.phase === "preparing" ? "Preparing" : status.launchSignature ? "Confirming transaction" : "Launching";
     statusText.textContent = view.canFund
       ? `${view.receivedSol} SOL received so far.`
       : view.message;
@@ -656,7 +775,7 @@ export default function mount() {
 
   function startPolling() {
     poller?.stop();
-    poller = new SequentialPoller(requestStatus, 5_000, (error) => {
+    poller = new SequentialPoller(requestStatus, 2_000, (error) => {
       if (!destroyed)
         statusText.textContent =
           error instanceof Error
@@ -843,21 +962,53 @@ export default function mount() {
             message: "Launch status unavailable.",
           };
     generateButton.hidden = !config.imageGeneration;
-    builder = createStrategyBuilder(builderRoot, {
-      catalog,
-      // A launch starts with a pack or a stock; holders can vote for anything later.
-      tabs: ["pack", "stock"],
-      onChange: (next) => {
-        current = next;
-        sync();
-      },
-    });
+    mountBuilder();
     checking = false;
     // The upstream catalogue can be unavailable without disabling burn or
     // wallet strategies. The strategy builder validates each selection.
     sync();
   }
 
+  /** A launch starts with a pack or a stock; a holder-reward launch starts with its
+   * market-making rules. Holders can vote for others later. */
+  function mountBuilder() {
+    if (!catalog) return;
+    current = null;
+    builder = createStrategyBuilder(builderRoot, {
+      catalog,
+      // Profits from the sell plan buy packs or stocks like any coin's treasury.
+      tabs: ["pack", "stock"],
+      onChange: (next) => {
+        current = next;
+        sync();
+      },
+    });
+  }
+  form.querySelector('[data-toggle-panel="holder"] [data-switch]')?.addEventListener("click", () => {
+    mountBuilder();
+    sync();
+  });
+
+  async function refreshReadiness() {
+    if (destroyed || checking || busy || prepared) return;
+    checking = true;
+    updateAvailability();
+    try {
+      const latest = await getJson<Config>("/api/launch-config");
+      if (destroyed) return;
+      config = latest;
+      freeConfig = Promise.resolve(latest);
+      if (latest.launchEnabled) clearError();
+    } catch {
+      if (!destroyed) config = { launchEnabled: false, baseFeeLamports: config?.baseFeeLamports ?? null, message: "" };
+    } finally {
+      if (!destroyed) { checking = false; updateAvailability(); }
+    }
+  }
+  const onReturn = () => { if (!document.hidden) void refreshReadiness(); };
+  recheck.addEventListener("click", refreshReadiness);
+  window.addEventListener("focus", onReturn);
+  document.addEventListener("visibilitychange", onReturn);
   sync();
   void initialise().catch(() => {
     if (destroyed) return;
@@ -867,6 +1018,10 @@ export default function mount() {
   });
   return () => {
     destroyed = true;
+    recheck.removeEventListener("click", refreshReadiness);
+    window.removeEventListener("focus", onReturn);
+    document.removeEventListener("visibilitychange", onReturn);
+    miner?.stop();
     latestRequest++;
     stopTimers();
     if (pictureUrl) URL.revokeObjectURL(pictureUrl);

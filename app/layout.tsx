@@ -5,6 +5,7 @@ export default function RootLayout({ children }: { children: any }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#090e15" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1" />
         <title>LaunchSeeds</title>
         <meta
           name="description"
