@@ -1,3 +1,5 @@
+import { refreshSiteSnapshots } from "../src/server/token-site";
+import { refreshHomeSnapshot } from "../src/server/home-snapshot-worker";
 import "../src/server/rpc-pacing-install";
 import { createLaunchseedsCoreServices } from "../src/services";
 import { createSolardIntegrations } from "../src/integrations/solard";
@@ -145,7 +147,7 @@ try {
   if (!once && launch) {
     const service = launch;
     fastLaunch = startLaunchLoop({
-      cycle: () => runLaunchCycle({store,launch:service}),
+      cycle: () => runLaunchCycle({store,launch:service,bundles:launchProvider?.bundles??undefined}),
       onStart: () => { health.startCycle(workerId); },
       onFinish: result => {
         health.finishCycle(workerId,result.errors.length===0,result.errors.map(e=>e.operation).join(","));
@@ -172,6 +174,7 @@ try {
       packs,
       stocks,
       market,
+      bundles: fastLaunch ? undefined : launchProvider?.bundles ?? undefined,
     });
     if (!fastLaunch) health.finishCycle(
       workerId,
@@ -183,6 +186,9 @@ try {
     );
     if (result.errors.length) console.error(JSON.stringify(result.errors));
     if (!once) await syncListener();
+    // Read-only page observations are produced here, never during SSR.
+    try { await refreshHomeSnapshot(store); await refreshSiteSnapshots(); }
+    catch (error) { console.error("Home observation refresh failed", error instanceof Error ? error.message : "Unknown error"); }
     if (once) {
       if (result.errors.length) process.exitCode = 1;
       break;

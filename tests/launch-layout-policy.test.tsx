@@ -15,7 +15,8 @@ describe("immutable launch-policy designer controls", () => {
     try {
       const form = d.getElementById("launch-form")!;
       const text = form.textContent || "";
-      const sections = ["Token", "Default strategy", "Sniper protection", "Concentrated liquidity", "Initial reward fund"];
+      // Sniper protection (the launch bundle) leads; everything else is under Advanced settings.
+      const sections = ["Token", "Sniper protection", "Advanced settings", "Default strategy", "Puzzle for buyers", "Concentrated liquidity", "Initial reward fund"];
       const indices = sections.map((name) => text.indexOf(name));
       expect(indices.every((n) => n >= 0)).toBe(true);
       expect(indices).toEqual([...indices].sort((a,b) => a-b));
@@ -50,13 +51,17 @@ describe("immutable launch-policy designer controls", () => {
       // Strategy rules are fixed defaults, not a form panel.
       expect(d.getElementById("strategy-rules")).toBeNull();
       expect(d.querySelector("[data-rule]")).toBeNull();
-      // Sliders: 30s puzzle, 25% of fees, $100K–$1M.
+      // Sliders: 0.5 SOL bundle, 30s puzzle, 25% of fees, $100K–$1M.
+      const bundleStops = [0.1, 0.25, 0.5, 1, 2, 3, 5];
+      expect(bundleStops[Number((d.querySelector("[data-bundle]") as HTMLInputElement).value)]).toBe(0.5);
       const stops = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300];
       expect(stops[Number((d.querySelector("[data-pow]") as HTMLInputElement).value)]).toBe(30);
       expect((d.querySelector("[data-share]") as HTMLInputElement).value).toBe("25");
       expect(d.querySelector("[data-range-out]")!.textContent).toBe("$100K–$1M");
-      for (const panel of ["pow", "liq"])
-        expect(d.querySelector(`[data-toggle-panel="${panel}"] [data-switch]`)!.getAttribute("aria-checked")).toBe("true");
+      // Sniper protection and holder rewards on; the buyer puzzle off.
+      const on = (panel: string) => d.querySelector(`[data-toggle-panel="${panel}"] [data-switch]`)!.getAttribute("aria-checked");
+      expect([on("bundle"), on("holder"), on("pow"), on("liq")]).toEqual(["true", "true", "false", "true"]);
+      expect(d.getElementById("advanced-settings")!.hasAttribute("open")).toBe(false);
     } finally { dom.window.close(); }
   });
 
@@ -90,7 +95,8 @@ describe("immutable launch-policy designer controls", () => {
     try {
       expect(d.getElementById("sniper-capability-note")).toBeNull();
       expect(d.getElementById("liquidity-capability-note")).toBeNull();
-      expect(d.getElementById("sniper-protection")!.textContent).toContain("on a MacBook");
+      expect(d.getElementById("sniper-protection")!.textContent).toContain("Jito bundle");
+      expect(d.getElementById("sniper-puzzle")!.textContent).toContain("on a MacBook");
       expect(d.querySelector("[data-fake-buy-progress]")).toBeNull();
     } finally { dom.window.close(); }
   });

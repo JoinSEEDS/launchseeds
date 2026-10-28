@@ -413,6 +413,70 @@ export const schemas = {
     createdAt: Time,
     confirmedAt: Time.nullable().default(null),
   }),
+  /** Sniper-protection bundles: LaunchSeeds's capital funds three new public
+   * wallets that buy a coin in its Jito launch bundle. They sell together once
+   * each gets 110% of its buy, or at market when the capital is needed for a
+   * new launch; then their accounts are closed and swept back to the capital
+   * wallet. Amounts are lamports / raw tokens. */
+  launchBundles: z.object({
+    tokenId: RowId,
+    status: z.enum(["buying", "holding", "exiting", "exited", "closed", "settling", "settled", "abandoned"]),
+    /** What the fund sent to the bundle wallets (buys + reserves): its principal. */
+    costLamports: Atomic.default("0"),
+    /** Chosen by the owner at liquidation: where this coin's realized profit goes. */
+    settlement: z.enum(["owner", "holders"]).nullable().default(null),
+    profitLamports: z.string().regex(/^-?\d+$/).nullable().default(null),
+    settledAt: Time.nullable().default(null),
+    /** Run by the launch CLI on another wallet store: shown here, never traded here. */
+    external: z.boolean().default(false),
+    /** Each wallet's sale minimum, basis points of its buy. */
+    exitTargetBps: z.number().int().default(10_200),
+    /** External bundles: the profit buyback (steps, buys, final burn) as JSON. */
+    buybackJson: z.string().nullable().default(null),
+    /** [{ name, wallet, budgetLamports }] */
+    buyersJson: z.string(),
+    /** Confirmed fills per buyer, after the launch lands. */
+    fillsJson: z.string().nullable().default(null),
+    /** Persisted signed exit before it is sent; its kind and lifetime. */
+    exitTransaction: z.string().nullable().default(null),
+    exitSignature: z.string().nullable().default(null),
+    exitLastValidBlockHeight: z.number().int().nullable().default(null),
+    /** profit: reached its target; rotation: capital was needed; deadline: the
+     * launcher's hold limit; close: the launcher closed it. */
+    exitKind: z.enum(["profit", "rotation", "deadline", "close"]).nullable().default(null),
+    proceedsLamports: Atomic.nullable().default(null),
+    sweepTransaction: z.string().nullable().default(null),
+    sweepSignature: z.string().nullable().default(null),
+    sweepLastValidBlockHeight: z.number().int().nullable().default(null),
+    error: z.string().nullable().default(null),
+    createdAt: Time,
+    launchedAt: Time.nullable().default(null),
+    exitedAt: Time.nullable().default(null),
+  }),
+  /** Original sweep bytes retained when expiry and absence are reconciled. */
+  bundleSweepAttempts: z.object({
+    bundleId: RowId,
+    signature: Id,
+    transaction: Id,
+    lastValidBlockHeight: Time,
+    outcome: z.literal("expired_unobserved"),
+    reconciledAt: Time,
+  }),
+  /** Profit payouts at a bundle's settlement, one row per transaction batch
+   * (signed bytes persisted before sending; resent while valid). */
+  bundlePayouts: z.object({
+    tokenId: RowId,
+    batch: z.number().int().min(0),
+    /** [{ wallet, lamports }] */
+    recipientsJson: z.string(),
+    totalLamports: Atomic,
+    status: z.enum(["pending", "confirmed", "failed"]),
+    transaction: z.string().nullable().default(null),
+    signature: z.string().nullable().default(null),
+    lastValidBlockHeight: z.number().int().nullable().default(null),
+    createdAt: Time,
+    confirmedAt: Time.nullable().default(null),
+  }),
 } as const;
 
 /** Stored rows: schema fields plus the ORM's integer `id`. */
@@ -440,6 +504,8 @@ export type FreeLaunch = Tables["freeLaunches"];
 export type Draw = Tables["draws"];
 export type StockWin = Tables["stockWins"];
 export type MmTrade = Tables["mmTrades"];
+export type LaunchBundle = Tables["launchBundles"];
+export type BundlePayout = Tables["bundlePayouts"];
 export type StrategyConfigValue = z.infer<typeof StrategyConfig>;
 export type LaunchStatusValue = z.infer<typeof LaunchStatus>;
 export type ExecutionStatusValue = z.infer<typeof ExecutionStatus>;

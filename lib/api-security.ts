@@ -36,6 +36,14 @@ export function requireSameOrigin(request: Request): void {
   }
 }
 
+/** Same-origin check for GET requests: browsers send no Origin on a same-origin
+ * GET, but every modern browser sends Sec-Fetch-Site. Accepts either a matching
+ * Origin or Sec-Fetch-Site: same-origin; rejects cross-site callers. */
+export function requireSameOriginRead(request: Request): void {
+  if (request.headers.get("sec-fetch-site") === "same-origin") return;
+  requireSameOrigin(request);
+}
+
 export function requireJsonContentType(request: Request): void {
   const value = request.headers.get("content-type") || "";
   if (!/^application\/json(?:\s*;|\s*$)/i.test(value)) {

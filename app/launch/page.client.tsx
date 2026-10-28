@@ -12,6 +12,9 @@ import {
   MARKET_CAP_STOPS,
   MAX_LIQUIDITY_SHARE,
   LIQUIDITY_AVAILABLE,
+  BUNDLE_STOPS_SOL,
+  BUNDLE_DEFAULT_EXIT_PERCENT,
+  bundleFeeLamports,
   type LaunchSettings,
 } from "../../src/domain/launch-settings";
 import { createStrategyBuilder } from "../components/strategy-builder";
@@ -48,6 +51,8 @@ type Config = {
   message: string;
   freeLaunch?: { available: boolean; bits: number | null };
   imageGeneration?: boolean;
+  /** Sniper protection (LaunchSeeds-funded launch bundle) is available. */
+  sniperBundles?: boolean;
 };
 
 function find<T extends HTMLElement>(id: string): T {
@@ -88,6 +93,17 @@ export default function mount() {
   const website = find<HTMLInputElement>("f-web");
   const x = find<HTMLInputElement>("f-x");
   const telegram = find<HTMLInputElement>("f-tg");
+  const bundleInput = find<HTMLInputElement>("f-bundle");
+  const descriptionInput = find<HTMLInputElement>("f-desc");
+  const descriptionOwn = find<HTMLInputElement>("f-desc-own");
+  const websiteOwn = find<HTMLInputElement>("f-web-own");
+  const feesTo = find<HTMLInputElement>("f-fees-to");
+  const cloneInput = find<HTMLInputElement>("f-clone");
+  const cloneButton = find<HTMLButtonElement>("clone-btn");
+  const cloneStatus = find<HTMLElement>("clone-status");
+  const cloneResult = find<HTMLElement>("clone-result");
+  const cloneDialog = find<HTMLDialogElement>("clone-dialog");
+  const openClone = find<HTMLButtonElement>("open-clone");
   const powInput = form.querySelector<HTMLInputElement>("[data-pow]")!;
   const shareInput = form.querySelector<HTMLInputElement>("[data-share]")!;
   const lowInput = form.querySelector<HTMLInputElement>("[data-range-lo]")!;
@@ -137,11 +153,35 @@ export default function mount() {
     form
       .querySelector(`[data-toggle-panel="${panel}"] [data-switch]`)
       ?.getAttribute("aria-checked") === "true";
-  /** Reward fund only counts when its panel is switched on. */
-  const rewardFund = () => (isOn("fund") ? dev.value.trim() || "0" : "0");
+  /** Sniper protection: the bundle size, when available and switched on. */
+  const bundleLamports = () =>
+    config?.sniperBundles === true && isOn("bundle")
+      ? Math.round(BUNDLE_STOPS_SOL[Number(bundleInput.value)]! * 1e9)
+      : null;
+  /** Reward fund only counts when its panel is on (not with sniper protection). */
+  const rewardFund = () => (isOn("fund") && !bundleLamports() ? dev.value.trim() || "0" : "0");
+  /** What the launcher sends beyond the base fee: reward fund + sniper-protection fee. */
+  const extraSol = () => {
+    const fund = Math.round(Number(rewardFund()) * 1e9) || 0;
+    return ((fund + bundleFeeLamports(bundleLamports())) / 1e9).toFixed(9).replace(/\.?0+$/, "") || "0";
+  };
 
-  function readSettings(): LaunchSettings {
+  /** The pressed chip's value in a chip group. */
+  const pressed = (attribute: string) =>
+    form.querySelector<HTMLElement>(`[${attribute}][aria-pressed="true"]`)?.getAttribute(attribute) ?? "";
+  const exitPercent = () => Number(pressed("data-exit")) || BUNDLE_DEFAULT_EXIT_PERCENT;
+  const holdMs = () => Number(pressed("data-hold")) || null;
+  const feesToWallet = () => pressed("data-fees") === "wallet";
+
+  /** `strict`: a missing or invalid fee address is an error (on submit); the
+   * live summary reads it as not yet chosen. */
+  function readSettings(strict = true): LaunchSettings {
+    const holderRewards = isOn("holder");
+    const address = feesTo.value.trim();
     return parseLaunchSettings({
+      bundleExitPercent: exitPercent(),
+      bundleMaxHoldMs: holdMs(),
+      feesTo: holderRewards && feesToWallet() && (strict || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) ? address : null,
       firstStrategyLockMs: rules.firstStrategyLockMs,
       minimumActiveMs: rules.minimumActiveMs,
       sniperSeconds: isOn("pow") ? SNIPER_SECONDS[Number(powInput.value)] : null,
@@ -152,7 +192,8 @@ export default function mount() {
             maxMcapUsd: MARKET_CAP_STOPS[Number(highInput.value)],
           }
         : null,
-      holderRewards: isOn("holder"),
+      holderRewards,
+      bundleLamports: bundleLamports(),
     });
   }
 
@@ -163,6 +204,21 @@ export default function mount() {
   };
   /** Slider readouts; the two range handles never cross. */
   function readSliders() {
+    const lastBundle = BUNDLE_STOPS_SOL.length - 1;
+    const stop = Number(bundleInput.value);
+    fill(bundleInput, 0, (stop / lastBundle) * 100);
+    const size = `${BUNDLE_STOPS_SOL[stop]} SOL`;
+    form.querySelector("[data-bundle-out]")!.textContent = size;
+    bundleInput.setAttribute("aria-valuetext", size);
+    find<HTMLElement>("bundle-fee").textContent =
+      `${(bundleFeeLamports(Math.round(BUNDLE_STOPS_SOL[stop]! * 1e9)) / 1e9).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} SOL`;
+    const how = (key: string) => form.querySelector<HTMLElement>(`[data-how-${key}]`)!;
+    how("size").textContent = size;
+    how("exit").textContent = `${exitPercent()}%`;
+    how("back").textContent = `${+((BUNDLE_STOPS_SOL[stop]! * exitPercent()) / 100).toFixed(4)} SOL`;
+    const limit = holdMs();
+    how("hold").hidden = !limit;
+    if (limit) how("limit").textContent = durationText(limit);
     const lastPow = SNIPER_SECONDS.length - 1;
     const pow = Number(powInput.value);
     fill(powInput, 0, (pow / lastPow) * 100);
@@ -187,13 +243,33 @@ export default function mount() {
   }
 
   function showSettingsSummary() {
-    const settings = readSettings();
+    const settings = readSettings(false);
+    // A holder-reward coin has no treasury, strategy or LaunchSeeds fee split:
+    // Pump pays its fees straight to holders (or the chosen wallet).
+    const holderCoin = settings.holderRewards;
+    find<HTMLElement>("summary-starts").hidden = holderCoin;
+    find<HTMLElement>("summary-fee-split").hidden = holderCoin;
+    const bundleFee = bundleFeeLamports(settings.bundleLamports);
+    form.ownerDocument.querySelectorAll<HTMLElement>("[data-summary-bundle]").forEach((n) => (n.hidden = !bundleFee));
+    find<HTMLElement>("summary-bundle-fee").textContent = `${bundleFee / 1e9} SOL`;
+    form.ownerDocument.querySelectorAll<HTMLElement>("[data-summary-fund]").forEach((n) => (n.hidden = holderCoin && rewardFund() === "0"));
     const rows: [string, string][] = [
-      ["Strategy lock", durationText(settings.firstStrategyLockMs)],
-      ["Minimum active", durationText(settings.minimumActiveMs)],
-      ["Sniper protection", sniperDescription(settings)],
-      ["Liquidity", settings.liquidity ? `${settings.liquidity.feeShare}% · ${rangeText(settings)}` : "Off"],
-      ["Holder rewards", settings.holderRewards ? "On · public market making" : "Off"],
+      ...(holderCoin ? [] : [
+        ["Strategy lock", durationText(settings.firstStrategyLockMs)],
+        ["Minimum active", durationText(settings.minimumActiveMs)],
+      ] as [string, string][]),
+      ["Sniper protection", settings.bundleLamports
+        ? `${settings.bundleLamports / 1e9} SOL bundle · ${bundleFeeLamports(settings.bundleLamports) / 1e9} SOL fee`
+        : "Off"],
+      ...(settings.bundleLamports ? [
+        ["Bundle sells", `at ${settings.bundleExitPercent}%${settings.bundleMaxHoldMs ? `, or at market after ${durationText(settings.bundleMaxHoldMs)}` : ""}`] as [string, string],
+      ] : []),
+      ...(settings.holderRewards ? [
+        ["Creator fees", settings.feesTo ? `To ${short(settings.feesTo)}` : "To holders"] as [string, string],
+      ] : []),
+      ...(settings.sniperSeconds !== null && !holderCoin ? [["Buyer puzzle", sniperDescription(settings)] as [string, string]] : []),
+      ...(settings.liquidity ? [["Liquidity", `${settings.liquidity.feeShare}% · ${rangeText(settings)}`] as [string, string]] : []),
+      ...(holderCoin ? [] : [["Holder rewards", "Off · fees fund the treasury"] as [string, string]]),
     ];
     render(
       <>{rows.map(([term, value]) => <><dt>{term}</dt><dd>{value}</dd></>)}</>,
@@ -244,7 +320,7 @@ export default function mount() {
   };
 
   function updateAvailability() {
-    const view = launchAvailability(config, rewardFund(), {
+    const view = launchAvailability(config, extraSol(), {
       checking,
       busy,
       connected: false,
@@ -364,6 +440,52 @@ export default function mount() {
     }
   });
 
+  /** Clone: fill the form from an existing coin (name, ticker, links, image). */
+  cloneButton.addEventListener("click", async () => {
+    const mint = cloneInput.value.trim();
+    if (!mint) { cloneInput.focus(); return; }
+    cloneButton.disabled = true;
+    cloneStatus.hidden = false;
+    cloneStatus.textContent = "Reading the coin…";
+    try {
+      const coin = await getJson<{ name: string; symbol: string; website: string; x: string; telegram: string; image: string | null }>(
+        `/api/clone?mint=${encodeURIComponent(mint)}`,
+      );
+      name.value = coin.name;
+      ticker.value = coin.symbol;
+      // A clone never takes the original's website: it gets its own page.
+      setOverride(websiteOwn, false);
+      x.value = coin.x;
+      telegram.value = coin.telegram;
+      if (coin.image) {
+        const blob = await (await fetch(coin.image)).blob();
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([blob], `${coin.symbol || "token"}.${blob.type.split("/")[1] || "png"}`, { type: blob.type }));
+        image.files = transfer.files;
+        image.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const links = [coin.x && "X", coin.telegram && "Telegram"].filter(Boolean);
+      cloneResult.hidden = false;
+      cloneResult.textContent = `Cloned ${coin.name} ($${coin.symbol})${coin.image ? " with its image" : " (no image found)"}${links.length ? `; copied its ${links.join(", ")} link${links.length > 1 ? "s" : ""}. Check them before launching.` : "."} It launches as a new coin.`;
+      cloneStatus.hidden = true;
+      cloneDialog.close();
+      sync();
+    } catch (error) {
+      cloneStatus.textContent = error instanceof Error ? error.message : "That coin could not be read.";
+    } finally {
+      cloneButton.disabled = false;
+    }
+  });
+
+  openClone.addEventListener("click", () => {
+    cloneStatus.hidden = true;
+    cloneDialog.showModal();
+    cloneInput.focus();
+  });
+  cloneInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); cloneButton.click(); }
+  });
+
   const onDetailChanged = (event: Event) => {
     if (!(event.target as HTMLElement).closest("#first-strategy-root")) sync();
   };
@@ -375,6 +497,42 @@ export default function mount() {
       sync();
     });
   });
+  /** "Write my own" / "My own": unlocks the field; unticked, it reverts to its default. */
+  function setOverride(box: HTMLInputElement, on: boolean) {
+    box.checked = on;
+    const field = find<HTMLInputElement>(box.dataset.override!);
+    field.readOnly = !on;
+    field.setAttribute("aria-readonly", String(!on));
+    field.closest(".input-locked")?.classList.toggle("is-open", on);
+    if (!on) field.value = field.dataset.default ?? "";
+    else if (field === website && !field.value) field.value = "https://";
+  }
+  for (const box of [descriptionOwn, websiteOwn]) {
+    box.addEventListener("change", () => {
+      setOverride(box, box.checked);
+      if (box.checked) find<HTMLInputElement>(box.dataset.override!).focus();
+    });
+  }
+  /** Chip groups: one pressed at a time. */
+  for (const attribute of ["data-exit", "data-hold", "data-fees"]) {
+    const chips = form.querySelectorAll<HTMLButtonElement>(`[${attribute}]`);
+    chips.forEach((chip) => chip.addEventListener("click", () => {
+      chips.forEach((other) => {
+        other.setAttribute("aria-pressed", String(other === chip));
+        if (other.getAttribute("role") === "radio") other.setAttribute("aria-checked", String(other === chip));
+      });
+      if (attribute === "data-fees") showFeeChoice();
+      sync();
+    }));
+  }
+  function showFeeChoice() {
+    const wallet = feesToWallet();
+    feesTo.hidden = !wallet;
+    find<HTMLElement>("holder-note").textContent = wallet
+      ? "Pump pays the coin's creator fees to this wallet instead of to holders."
+      : "Pump pays the coin's trading fees to its holders in SOL, automatically.";
+    if (wallet) feesTo.focus();
+  }
   // On/off panels.
   form.querySelectorAll<HTMLElement>("[data-toggle-panel]").forEach((panel) => {
     const toggle = panel.querySelector<HTMLButtonElement>("[data-switch]")!;
@@ -830,7 +988,8 @@ export default function mount() {
       name: name.value,
       symbol: ticker.value,
       devBuySol: rewardFund(),
-      website: website.value,
+      description: descriptionOwn.checked ? descriptionInput.value : "",
+      website: websiteOwn.checked ? website.value : "",
       x: x.value,
       telegram: telegram.value,
       image: "",
@@ -962,6 +1121,8 @@ export default function mount() {
             message: "Launch status unavailable.",
           };
     generateButton.hidden = !config.imageGeneration;
+    // Without sniper-protection capital the panel is hidden and off.
+    find<HTMLElement>("sniper-protection").hidden = config.sniperBundles !== true;
     mountBuilder();
     checking = false;
     // The upstream catalogue can be unavailable without disabling burn or
@@ -984,10 +1145,14 @@ export default function mount() {
       },
     });
   }
+  // The creator-fee choice is a holder-reward coin's; treasury coins have none.
+  const showFeesPanel = () => { find<HTMLElement>("creator-fees").hidden = !isOn("holder"); };
   form.querySelector('[data-toggle-panel="holder"] [data-switch]')?.addEventListener("click", () => {
+    showFeesPanel();
     mountBuilder();
     sync();
   });
+  showFeesPanel();
 
   async function refreshReadiness() {
     if (destroyed || checking || busy || prepared) return;

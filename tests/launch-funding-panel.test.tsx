@@ -57,7 +57,7 @@ test("funding panel copies exact values, watches deposits, and marks completed s
     expect(get("launch-busy").hidden).toBe(true);
     expect(get("launch-live").hidden).toBe(false);
     expect(get("launch-live").textContent).toContain("$TEST is live");
-    expect(get("launched-token-link").getAttribute("href")).toBe(`/token/${"1".repeat(32)}`);
+    expect(get("launched-token-link").getAttribute("href")).toBe(`/coin/${"1".repeat(32)}`);
     expect(get("share-on-x").getAttribute("href")).toContain("https://x.com/intent/post?text=");
   } finally {
     cleanup?.(); dom.window.close(); globalThis.fetch=oldFetch;

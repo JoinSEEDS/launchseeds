@@ -17,6 +17,7 @@ export async function GET(): Promise<Response> {
       checkedAt: readiness.checkedAt,
       freeLaunch: { available: freeAvailable, bits: free?.config.bits ?? null },
       imageGeneration: process.env.LAUNCHSEEDS_IMAGE_GENERATION === "true",
+      sniperBundles: process.env.LAUNCHSEEDS_LAUNCH_BUNDLES === "true",
       message: readiness.enabled
         ? "Final funding requirements are confirmed during preparation."
         : "Token launches are temporarily unavailable. Do not send funds.",

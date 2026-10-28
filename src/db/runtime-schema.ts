@@ -1,6 +1,11 @@
 import { z } from "sqlite-zod-orm";
 import { Id, RowId, Time, Address } from "./schema";
 export const runtimeSchemas = {
+  publicPageSnapshots: z.object({
+    key: Id,
+    valueJson: z.string(),
+    observedAt: Time,
+  }),
   governanceState: z.object({
     tokenId: RowId,
     initialStrategyId: RowId,

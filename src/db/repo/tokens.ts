@@ -134,6 +134,10 @@ export function tokenRepo(db: SqlDb) {
     update(id: number, patch: Partial<Token>) {
       return patchById(db, "tokens", id, patch, PATCH);
     },
+    /** Set once: the wallet that paid for the launch. */
+    recordLauncher(id: number, wallet: string) {
+      return db.tokens.select().where({ id, launcherWallet: { $isNull: true } }).updateAll({ launcherWallet: wallet }) > 0;
+    },
     /** Holder-reward launch: the public market-making wallet that makes the launch buy. */
     assignMarketMaker(id: number, address: string) {
       return patchById(db, "tokens", id, { devBuyRecipient: address }, ["devBuyRecipient"]);

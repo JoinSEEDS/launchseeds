@@ -42,11 +42,16 @@ const baseline: PublicLaunchStatus = {
 };
 
 describe("launch field preparation", () => {
-  test("locks the exact description during submission", () => {
+  test("uses the default description and the coin's own page unless the launcher overrides them", () => {
     const payload = buildLaunchPayload(fields);
     expect(payload.description).toBe(DESCRIPTION);
     expect(payload.symbol).toBe("FAIR");
     expect(payload.name).toBe("Launchseeds");
+    expect(payload.website).toBe("https://launchseeds.xyz");
+    const defaults = buildLaunchPayload({ ...fields, website: "", description: "  " });
+    expect(defaults.website).toBe("");
+    expect(defaults.description).toBe(DESCRIPTION);
+    expect(buildLaunchPayload({ ...fields, description: " Mine " }).description).toBe("Mine");
     expect(payload.firstStrategy).toEqual({ type: "burn", amount: 25 });
     expect(Object.keys(payload).sort()).toEqual(
       [
@@ -122,7 +127,7 @@ describe("launch field preparation", () => {
     // Launches created before 2026-10-25 keep their id-shaped handle.
     expect(launchUrl("550e8400-e29b-41d4-a716-446655440000")).toBe("/launch?launch=550e8400-e29b-41d4-a716-446655440000");
     const mint = "HchTYRATYXki7CAKkyRGMqMuKejgVxit6YYzwMfZBmtM";
-    expect(publicTokenUrl(mint)).toBe(`/token/${mint}`);
+    expect(publicTokenUrl(mint)).toBe(`/coin/${mint}`);
     expect(publicTokenUrl(uid)).toBeNull();
     expect(launchUrl("../../api/launches")).toBeNull();
     expect(publicTokenUrl("garbage")).toBeNull();

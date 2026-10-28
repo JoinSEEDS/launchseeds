@@ -44,6 +44,10 @@ function launchRuntime() {
     throw error;
   }));
 }
+/** The sniper-protection bundle engine, when launches and bundles are on. */
+export async function getBundleEngine() {
+  return (await launchRuntime()).provider?.bundles ?? null;
+}
 export async function getLaunchService() {
   return (await launchRuntime()).service;
 }

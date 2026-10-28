@@ -48,6 +48,26 @@ export const DEFAULT_SELL_PLAN: readonly SellPoint[] = Object.freeze([
   { marketCapUsd: 2_500_000, percent: 20 },
 ]);
 
+/** Built-in sniper protection: LaunchSeeds's capital buys this much in the launch's
+ * Jito bundle (three public wallets) and sells it back later. The launcher pays
+ * only a fee of 3% of it (at least 0.01 SOL); LaunchSeeds gets the rest back. */
+export const BUNDLE_MIN_LAMPORTS = 100_000_000;
+export const BUNDLE_MAX_LAMPORTS = 5_000_000_000;
+export const BUNDLE_DEFAULT_LAMPORTS = 500_000_000;
+export const BUNDLE_FEE_BPS = 300;
+/** Slider stops for the bundle size, in SOL. */
+export const BUNDLE_STOPS_SOL = [0.1, 0.25, 0.5, 1, 2, 3, 5] as const;
+export const BUNDLE_MIN_FEE_LAMPORTS = 10_000_000;
+/** When the bundle sells: once every wallet gets back this share of its buy. */
+export const BUNDLE_EXIT_PERCENTS = [102, 103, 110, 125, 150, 200] as const;
+export const BUNDLE_DEFAULT_EXIT_PERCENT = 102;
+/** Optional hold limit: past it the bundle sells at market, target or not. */
+export const BUNDLE_HOLD_LIMITS_MS = [3_600_000, 21_600_000, 86_400_000, 604_800_000] as const;
+export function bundleFeeLamports(bundleLamports: number | null | undefined): number {
+  if (!bundleLamports) return 0;
+  return Math.max(BUNDLE_MIN_FEE_LAMPORTS, Math.ceil((bundleLamports * BUNDLE_FEE_BPS) / 10_000));
+}
+
 export const LaunchSettingsSchema = z.object({
   firstStrategyLockMs: z.union([
     z.literal(0), z.literal(3_600_000), z.literal(86_400_000), z.literal(604_800_000),
@@ -65,7 +85,17 @@ export const LaunchSettingsSchema = z.object({
   holderRewards: z.boolean().default(false),
   /** Holder-reward coins: the market maker's fixed, public sell plan (see SellPointSchema). */
   sellPlan: SellPlanSchema.default([]),
-}).strict();
+  /** Sniper-protection bundle size in lamports (null: none). */
+  bundleLamports: z.number().int().min(BUNDLE_MIN_LAMPORTS).max(BUNDLE_MAX_LAMPORTS).nullable().default(null),
+  /** Bundle sale target, percent of each wallet's buy. */
+  bundleExitPercent: oneOf(BUNDLE_EXIT_PERCENTS).default(BUNDLE_DEFAULT_EXIT_PERCENT),
+  /** null: hold until the target (or until LaunchSeeds needs the capital). */
+  bundleMaxHoldMs: oneOf(BUNDLE_HOLD_LIMITS_MS).nullable().default(null),
+  /** Holder-reward coins: creator fees go to this wallet instead of to holders. */
+  feesTo: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "Enter a valid Solana address for the fees").nullable().default(null),
+}).strict().refine((v) => !v.feesTo || v.holderRewards, {
+  message: "A fee address applies to holder-reward coins only.", path: ["feesTo"],
+});
 
 export type LaunchSettings = z.infer<typeof LaunchSettingsSchema>;
 export const DEFAULT_LAUNCH_SETTINGS: LaunchSettings = Object.freeze({
@@ -76,6 +106,10 @@ export const DEFAULT_LAUNCH_SETTINGS: LaunchSettings = Object.freeze({
   liquidity: null,
   holderRewards: false,
   sellPlan: [],
+  bundleLamports: null,
+  bundleExitPercent: BUNDLE_DEFAULT_EXIT_PERCENT,
+  bundleMaxHoldMs: null,
+  feesTo: null,
 });
 
 /** Existing tokens without this feature keep their original three-minute governance rule. */
@@ -86,6 +120,10 @@ export const UNSPECIFIED_LAUNCH_SETTINGS: LaunchSettings = Object.freeze({
   liquidity: null,
   holderRewards: false,
   sellPlan: [],
+  bundleLamports: null,
+  bundleExitPercent: BUNDLE_DEFAULT_EXIT_PERCENT,
+  bundleMaxHoldMs: null,
+  feesTo: null,
 });
 
 export function parseLaunchSettings(value: unknown): LaunchSettings {

@@ -2,7 +2,10 @@ import { DESCRIPTION } from "../../lib/strategy";
 import { solToLamports } from "../../src/shared/domain";
 import { launchTotal } from "../../lib/launch-ui";
 import { DESIGN_LAUNCH_FEE_LAMPORTS } from "../../lib/launch-presentation";
-import { SNIPER_SECONDS, MARKET_CAP_STOPS, MAX_LIQUIDITY_SHARE, LIQUIDITY_AVAILABLE, DEFAULT_SELL_PLAN } from "../../src/domain/launch-settings";
+import {
+  SNIPER_SECONDS, MARKET_CAP_STOPS, MAX_LIQUIDITY_SHARE, LIQUIDITY_AVAILABLE, BUNDLE_STOPS_SOL, BUNDLE_DEFAULT_LAMPORTS,
+  BUNDLE_EXIT_PERCENTS, BUNDLE_DEFAULT_EXIT_PERCENT, BUNDLE_HOLD_LIMITS_MS, durationText,
+} from "../../src/domain/launch-settings";
 
 export default function LaunchPage() {
   // This is a display quote, not a readiness signal. The API independently
@@ -21,7 +24,7 @@ export default function LaunchPage() {
         <div>
           <h1 className="page-title">Launch a Token</h1>
           <p className="page-lede">
-            Name it, set how holders govern its fees, and launch it.
+            Name it, choose who gets its fees, and launch it with sniper protection.
           </p>
         </div>
       </div>
@@ -36,7 +39,9 @@ export default function LaunchPage() {
             <section className="panel">
               <div className="panel__head">
                 <span className="label">Token</span>
+                <button className="btn btn--sm btn--ghost" type="button" id="open-clone">Clone a coin</button>
               </div>
+              <p className="setting-help clone-status" id="clone-result" role="status" hidden></p>
               <div className="panel__body">
                 <div className="token-fields">
                   <div className="upload-col">
@@ -98,15 +103,23 @@ export default function LaunchPage() {
                       />
                     </div>
                     <div className="field span-all">
-                      <label className="label label--sm" htmlFor="f-desc">
-                        Description
-                      </label>
+                      <span className="field-head">
+                        <label className="label label--sm" htmlFor="f-desc">
+                          Description
+                        </label>
+                        <label className="check">
+                          <input type="checkbox" id="f-desc-own" data-override="f-desc" />
+                          Write my own
+                        </label>
+                      </span>
                       <span className="input-locked">
                         <input
                           className="input"
                           id="f-desc"
                           name="description"
                           value={DESCRIPTION}
+                          data-default={DESCRIPTION}
+                          maxLength={500}
                           readOnly
                           aria-readonly="true"
                         />
@@ -135,15 +148,24 @@ export default function LaunchPage() {
                 </div>
                 <div className="form-grid" style={{ marginTop: "14px" }}>
                   <div className="field">
-                    <label className="label label--sm" htmlFor="f-web">
-                      Website (optional)
-                    </label>
+                    <span className="field-head">
+                      <label className="label label--sm" htmlFor="f-web">
+                        Website
+                      </label>
+                      <label className="check">
+                        <input type="checkbox" id="f-web-own" data-override="f-web" />
+                        My own
+                      </label>
+                    </span>
                     <input
                       className="input"
                       id="f-web"
                       name="website"
                       type="url"
-                      placeholder="https://"
+                      readOnly
+                      data-default=""
+                      placeholder="launchseeds.xyz/coin/<CA>"
+                      title="Set automatically to this new coin’s LaunchSeeds page, unless you use your own"
                     />
                   </div>
                   <div className="field">
@@ -172,24 +194,72 @@ export default function LaunchPage() {
               </div>
             </section>
 
+            <section className="panel toggle-panel" data-toggle-panel="bundle" id="sniper-protection">
+              <div className="panel__head">
+                <span className="label" id="t-bundle">Sniper protection</span>
+                <button className="switch" type="button" role="switch" aria-checked="true" aria-labelledby="t-bundle" data-switch=""></button>
+              </div>
+              <div className="toggle-panel__body">
+                <div className="readout"><b data-bundle-out="">0.5 SOL</b><span>bought at launch</span></div>
+                <div className="slider" style={{ "--lo": "0%", "--hi": "33%" }}>
+                  <input type="range" min="0" max={String(BUNDLE_STOPS_SOL.length - 1)} step="1" value={String(BUNDLE_STOPS_SOL.indexOf((BUNDLE_DEFAULT_LAMPORTS / 1e9) as never))} data-bundle="" id="f-bundle" aria-label="Sniper protection size in SOL" />
+                </div>
+                <div className="ticks"><span>0.1</span><span>0.5</span><span>1</span><span>2</span><span>5 SOL</span></div>
+                <div className="field">
+                  <span className="label label--sm" id="l-exit">Sells when each wallet gets back</span>
+                  <div className="chips" role="group" aria-labelledby="l-exit">
+                    {BUNDLE_EXIT_PERCENTS.map((value) => (
+                      <button className="chip" type="button" data-exit={String(value)} aria-pressed={String(value === BUNDLE_DEFAULT_EXIT_PERCENT)}>{`${value}%`}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="field">
+                  <span className="label label--sm" id="l-hold">Time limit</span>
+                  <div className="chips" role="group" aria-labelledby="l-hold">
+                    <button className="chip" type="button" data-hold="" aria-pressed="true">None</button>
+                    {BUNDLE_HOLD_LIMITS_MS.map((ms) => (
+                      <button className="chip" type="button" data-hold={String(ms)} aria-pressed="false">{durationText(ms)}</button>
+                    ))}
+                  </div>
+                </div>
+                <ol className="bundle-how" id="bundle-how" aria-label="How sniper protection works">
+                  <li>Your coin is created and <b data-how-size="">0.5 SOL</b> of it is bought in the same Jito bundle, from three new public wallets funded by LaunchSeeds. No sniper can buy before them.</li>
+                  <li>The three wallets sell together once each gets back <b data-how-exit="">110%</b> of its buy (<b data-how-back="">0.55 SOL</b> in all).</li>
+                  <li data-how-hold="" hidden>If that hasn't happened after <b data-how-limit="">24h</b>, they sell at market.</li>
+                  <li>LaunchSeeds holds at most three coins at once: when a new launch needs the capital, the oldest is sold at market.</li>
+                  <li>You can close it yourself on the coin's page, with the wallet you pay from.</li>
+                  <li>You pay only <strong id="bundle-fee">0.015 SOL</strong> (3%). The buy itself is LaunchSeeds's money and returns to LaunchSeeds.</li>
+                </ol>
+              </div>
+            </section>
+
+            <section className="panel" id="creator-fees">
+              <div className="panel__head">
+                <span className="label" id="l-fees">Creator fees go to</span>
+              </div>
+              <div className="panel__body stack stack--tight">
+                <div className="chips" role="radiogroup" aria-labelledby="l-fees">
+                  <button className="chip" type="button" role="radio" data-fees="holders" aria-checked="true" aria-pressed="true">Holders</button>
+                  <button className="chip" type="button" role="radio" data-fees="wallet" aria-checked="false" aria-pressed="false">A wallet</button>
+                </div>
+                <input className="input mono" id="f-fees-to" placeholder="Solana address that receives the creator fees" aria-label="Wallet that receives the creator fees" autoComplete="off" spellCheck={false} hidden />
+                <p className="setting-help" id="holder-note">Pump pays the coin's trading fees to its holders in SOL, automatically.</p>
+              </div>
+            </section>
+
+            <details className="advanced" id="advanced-settings">
+              <summary className="advanced__summary">Advanced settings</summary>
+              <div className="stack">
             <section className="panel toggle-panel" data-toggle-panel="holder" id="holder-rewards">
               <div className="panel__head">
-                <span className="label" id="t-holder">Holder rewards + market making</span>
-                <button className="switch" type="button" role="switch" aria-checked="false" aria-labelledby="t-holder" data-switch=""></button>
+                <span className="label" id="t-holder">Holder rewards</span>
+                <button className="switch" type="button" role="switch" aria-checked="true" aria-labelledby="t-holder" data-switch=""></button>
               </div>
               <div className="toggle-panel__body">
                 <p className="setting-help">
-                  Trading fees go to holders automatically through Pump. Your launch buy is made by a new, public
-                  market-making wallet that sells only at these market caps, fixed at launch. The profit of each sale
-                  buys this coin's rewards (packs or stocks) for holders. Needs a launch buy.
+                  On: trading fees go to holders in SOL, paid automatically by Pump. Off: fees go to the coin's
+                  treasury and buy the rewards chosen below (packs or stocks).
                 </p>
-                <ol className="sell-plan" id="sell-plan">
-                  {DEFAULT_SELL_PLAN.map((p) => (
-                    <li>
-                      <b>{p.percent}%</b> of the launch buy at <b>${p.marketCapUsd.toLocaleString("en-US")}</b> market cap
-                    </li>
-                  ))}
-                </ol>
               </div>
             </section>
 
@@ -199,10 +269,10 @@ export default function LaunchPage() {
               </div>
               <div data-builder="" id="first-strategy-root"></div>
             </section>
-            <section className="panel toggle-panel" data-toggle-panel="pow" id="sniper-protection">
+            <section className="panel toggle-panel is-off" data-toggle-panel="pow" id="sniper-puzzle">
               <div className="panel__head">
-                <span className="label" id="t-pow">Sniper protection</span>
-                <button className="switch" type="button" role="switch" aria-checked="true" aria-labelledby="t-pow" data-switch=""></button>
+                <span className="label" id="t-pow">Puzzle for buyers</span>
+                <button className="switch" type="button" role="switch" aria-checked="false" aria-labelledby="t-pow" data-switch=""></button>
               </div>
               <div className="toggle-panel__body">
                 <div className="readout"><b data-pow-out="">30s</b><span>to solve on a MacBook</span></div>
@@ -254,7 +324,26 @@ export default function LaunchPage() {
                 <p className="setting-help">Optional. Buys <strong id="reward-fund-ticker">$TOKEN</strong> at launch and puts it in the treasury as a starting reward fund, on top of trading fees.</p>
               </div>
             </section>
+              </div>
+            </details>
           </form>
+
+          <dialog className="modal" id="clone-dialog" aria-labelledby="clone-title" style={{ width: "min(520px, calc(100vw - 32px))" }}>
+            <form method="dialog" className="modal__head">
+              <div>
+                <h2 className="modal__title" id="clone-title">Clone a coin</h2>
+                <p className="modal__sub">Paste a coin's contract address. Its name, ticker, image and links fill the form; you can edit them before launching. It launches as a new coin.</p>
+              </div>
+              <button className="modal__close" value="cancel" aria-label="Close">✕</button>
+            </form>
+            <div className="panel__body stack stack--tight">
+              <div className="clone-row">
+                <input className="input" id="f-clone" placeholder="Contract address" aria-label="Contract address of a coin to clone" autoComplete="off" spellCheck={false} />
+                <button className="btn btn--sm" type="button" id="clone-btn">Clone</button>
+              </div>
+              <p className="setting-help clone-status" id="clone-status" role="status" hidden></p>
+            </div>
+          </dialog>
 
           <section
             className="panel pay"
@@ -397,6 +486,7 @@ export default function LaunchPage() {
             </div>
             <div
               className="panel__body"
+              id="summary-starts"
               style={{ borderBottom: "1px solid var(--line-soft)" }}
             >
               <div className="label label--sm" style={{ marginBottom: "10px" }}>
@@ -407,7 +497,7 @@ export default function LaunchPage() {
             <div className="panel__body summary-block">
               <dl className="dl" id="summary-rules"></dl>
             </div>
-            <div className="panel__body summary-block">
+            <div className="panel__body summary-block" id="summary-fee-split">
               <div className="label label--sm">Fees</div>
               <div className="split-bar" id="launch-fee-split" role="img" aria-label={LIQUIDITY_AVAILABLE ? "10% to $TOKEN, 25% to liquidity, 65% to holder rewards" : "10% to $TOKEN, 90% to holder rewards"}></div>
               <div className="split-legend" id="launch-fee-legend"></div>
@@ -417,8 +507,10 @@ export default function LaunchPage() {
               <dl className="dl">
                 <dt>Launch fee</dt>
                 <dd id="summary-fee">{`${(fixedFee / 1e9).toFixed(2)} SOL`}</dd>
-                <dt>Reward fund</dt>
-                <dd>
+                <dt data-summary-bundle="" hidden>Sniper protection (3%)</dt>
+                <dd data-summary-bundle="" hidden id="summary-bundle-fee">0 SOL</dd>
+                <dt data-summary-fund="">Reward fund</dt>
+                <dd data-summary-fund="">
                   <span data-dev-out="" id="summary-dev">
                     0
                   </span>{" "}

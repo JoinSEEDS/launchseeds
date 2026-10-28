@@ -6,6 +6,11 @@ persistence layer, **not a complete mainnet application or integrated service ru
 
 ## Files
 
+Bundle sweeps retain expired signed attempts in `bundleSweepAttempts`. A replacement
+requires finalized expiry followed by fresh history-status and transaction absence;
+RPC failures and observed transactions cannot authorize a replacement. Funded
+launches persist capital wait reasons so the queue is visible to operators.
+
 - `src/db/schema.ts` — persisted model and shared `StrategyConfig` union
 - `src/db/indexes.ts` — unique/partial indexes; run after ORM creates tables
 - `src/db/connection.ts` — opens sqlite-zod-orm, WAL, and indexes
@@ -129,3 +134,5 @@ the returned URI; a public application URL is not required for metadata.
 The configured public mainnet RPC and a healthy worker are still required.
 In production, run the same `bun run start` behind Caddy; keep it bound to
 127.0.0.1 so Caddy is the only way in.
+
+Automatic bundle exits use a pre-signed fixed-minimum sale (102% of each wallet's buy budget, before network fees), persisted at fill confirmation and checked on the fast launch loop. Unsent candidates renew before blockhash expiry. Automatic capital rotation respects this floor; explicit operator liquidation is separate.

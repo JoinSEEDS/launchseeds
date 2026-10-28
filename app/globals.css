@@ -1217,3 +1217,49 @@ body:has(main[data-launch]) .topbar__launch{display:none}
 /* Holder-reward launches: the fixed public sell plan. */
 .sell-plan { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .sell-plan b { color: var(--text-hi); }
+
+/* Launch form: clone a coin by contract address; collapsed advanced settings. */
+.clone-row { display: flex; gap: 8px; }
+.clone-row .input { flex: 1; min-width: 0; font-family: var(--mono, ui-monospace, monospace); font-size: 13px; }
+.setting-help.clone-status { color: var(--muted); }
+.advanced { border: 1px solid var(--line, rgba(127,127,127,.25)); border-radius: 12px; }
+.advanced__summary { cursor: pointer; padding: 14px 20px; font-size: 13px; font-weight: 600; color: var(--muted); list-style: none; }
+.advanced__summary::-webkit-details-marker { display: none; }
+.advanced__summary::before { content: "▸"; display: inline-block; margin-right: 8px; transition: transform .15s; }
+.advanced[open] .advanced__summary::before { transform: rotate(90deg); }
+.advanced > .stack { padding: 0 12px 12px; }
+#holder-note { margin: -4px 4px 0; }
+#clone-result { padding: 10px 20px 0; margin: 0; }
+@media (max-width: 560px) { #clone-result { padding: 10px 16px 0; } }
+
+/* launch form: override checkboxes, chip groups, sniper-protection steps */
+.field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.check input { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
+.input-locked.is-open .input { color: var(--text-hi); background: transparent; cursor: text; }
+.input-locked.is-open svg { display: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips .chip { min-height: 36px; }
+.bundle-how { margin: 0; padding: 12px 14px 12px 32px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); display: grid; gap: 6px; font-size: 13px; line-height: 1.5; color: var(--text); }
+.bundle-how li { padding-left: 2px; }
+.bundle-how li::marker { color: var(--muted); font-weight: 700; }
+.bundle-how b, .bundle-how strong { color: var(--text-hi); }
+
+/* coin page: chart and trade panel */
+.chart-panel { margin-bottom: 16px; overflow: hidden; }
+.chart-frame { display: block; width: 100%; height: 420px; border: 0; background: #0b121b; }
+@media (max-width: 640px) { .chart-frame { height: 320px; } }
+.trade__tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.trade__tab { min-height: 40px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-weight: 700; }
+.trade__tab.is-buy[aria-selected="true"] { border-color: #2fbf71; color: #2fbf71; background: rgba(47, 191, 113, 0.08); }
+.trade__tab.is-sell[aria-selected="true"] { border-color: #e5484d; color: #e5484d; background: rgba(229, 72, 77, 0.08); }
+.trade__slippage { display: grid; gap: 6px; }
+.chip--sm { min-width: 40px; min-height: 30px !important; padding: 0 8px; font-size: 11px; }
+.btn--danger { background: #e5484d; border-color: #e5484d; color: #fff; }
+
+.social-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 6px; }
+.trade .amount__input { flex: none; }
+.trade .chips { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.trade .chips .chip { min-width: 0; padding: 0 4px; }
+.trade__slippage .chips { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+#sniper-bundle { margin-bottom: 20px; }

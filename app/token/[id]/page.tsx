@@ -1,17 +1,18 @@
+import { displayStrategyCostMicros } from "../../../lib/reward-funding";
+import { xLink } from "../../../lib/launch-socials";
 import { storedLaunchSettings, durationText, activeLockUntil, elapsedText } from "../../../src/domain/launch-settings";
 import { getStore } from "../../../src/server/runtime";
 import { strategyBoard } from "../../../lib/governance";
-import { getCatalog } from "../../../src/server/catalog";
+import { storedHomeObservations } from "../../../src/server/home-snapshot";
 import { strategyName } from "../../../lib/strategy";
 import {
   quoteStrategy,
   calculateReadiness,
 } from "../../../lib/treasury-readiness";
 import { initials, shortAddress } from "../../../lib/format";
-import { getMintMarketCap } from "../../../src/server/token-market";
-import { unclaimedFeesSoon } from "../../../src/server/creator-fees";
 import { tokenWins, raffleLeaderboard } from "../../../src/server/draws";
 import { marketView } from "../../../src/server/market-view";
+import { bundleView } from "../../../src/server/bundle-view";
 
 function boardLockUntil(tokenId: number, store: ReturnType<typeof getStore>, settings: ReturnType<typeof storedLaunchSettings>, now: number) {
   const token = store.repo.tokens.get(tokenId);
@@ -26,7 +27,7 @@ function boardLockUntil(tokenId: number, store: ReturnType<typeof getStore>, set
   });
 }
 
-export default async function TokenPage({
+export default function TokenPage({
   params,
 }: {
   params: { id: string };
@@ -59,8 +60,8 @@ export default async function TokenPage({
   const lockText = lockLeft <= 0
     ? "open to takeover"
     : `${creatorLocked ? "locked for" : "can change in"} ${lockLeft >= 3_600_000 ? `${Math.ceil(lockLeft / 3_600_000)}h` : `${Math.ceil(lockLeft / 60_000)}m`}`;
-  const board = strategyBoard(tokenId),
-    catalog = await getCatalog().catch(() => null);
+  const observations = storedHomeObservations(store);
+  const board = strategyBoard(tokenId), catalog = observations.catalog;
   const active = board?.active;
   const ready = active
     ? calculateReadiness(
@@ -81,19 +82,24 @@ export default async function TokenPage({
       )
     : null;
   const available = Math.max(0, (ready?.recordedAvailableMicros ?? 0) / 1e6);
-  const cost =
-    ready?.quote.costMicros === null || !ready
-      ? null
-      : ready.quote.costMicros / 1e6;
-  const pct = ready?.progressPercent ?? 0;
-  const [marketCap, unclaimedFees] = await Promise.all([
-    getMintMarketCap(token.mint, token.priceUsd),
-    unclaimedFeesSoon(token),
-  ]);
-  const holderCount = store.leaderboard(token.id).holders.length;
+  const displayCost = active ? displayStrategyCostMicros(active, catalog, active.type === "pack" ? store.repo.packs.get(active.ref)?.priceUsdCents : undefined) : null;
+  const cost = displayCost === null ? null : displayCost / 1e6;
+  const pct = cost ? Math.min(100, 100 * available / cost) : 0;
+  const observation = observations.capPairs.find(row => row.id === tokenId);
+  const marketCap = observation?.cap ?? null, unclaimedFees = observation?.fees ?? null;
   const leaderboard = raffleLeaderboard(store, token.id);
+  // Holders other than LaunchSeeds's own wallets (treasury, sniper-protection bundle).
+  const holderCount = leaderboard.holders.length;
   const wins = tokenWins(store, token.id);
   const market = marketView(store, token.id);
+  const bundle = bundleView(store, token.id);
+  // Holder-reward coins: fees go to holders through Pump, so the treasury,
+  // strategy vote and pack rewards do not apply; the sniper-protection fund does.
+  const sniperCoin = market.holderRewards;
+  const bundleStatus: Record<string, string> = {
+    buying: "Launching", holding: "Holding", exiting: "Selling", exited: "Sold, sweeping to the fund",
+    closed: "Sold; profit held in the fund", settling: "Paying out profit", settled: "Settled", abandoned: "Not launched",
+  };
   const sol = (lamports: string | bigint) => `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
   const units = (raw: string) => (Number(raw) / 10 ** market.tokenDecimals).toLocaleString("en-US", { maximumFractionDigits: 0 });
   const pendingWin = wins.find((w) => !w.card) ?? null;
@@ -133,8 +139,13 @@ export default async function TokenPage({
               </span>
             </div>
             <p className="page-lede">
-              Holders vote on what this token's fees do. Each reward is funded
-              by its treasury.
+              {!sniperCoin
+                ? "Holders vote on what this token's fees do. Each reward is funded by its treasury."
+                : settings.feesTo
+                  ? `Launched with sniper protection. Creator fees go to ${shortAddress(settings.feesTo)}.`
+                  : bundle
+                    ? "Launched with sniper protection. Pump pays its trading fees to holders in SOL."
+                    : "Pump pays this coin's trading fees to holders in SOL."}
             </p>
             <div className="social-row">
               {token.website ? (
@@ -148,7 +159,7 @@ export default async function TokenPage({
               ) : null}
               {token.x ? (
                 <a
-                  href={`https://x.com/${token.x.replace(/^@/, "")}`}
+                  href={xLink(token.x)}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -179,7 +190,7 @@ export default async function TokenPage({
             </div>
           </div>
         </div>
-        <section className="panel">
+        <section className="panel" hidden={sniperCoin}>
           <div className="panel__head">
             <span className="label">Treasury</span>
             <span className="addr">
@@ -265,8 +276,62 @@ export default async function TokenPage({
             ></p>
           </div>
         </section>
+        {token.mint && token.status === "live" ? (
+          <section className="panel chart-panel" aria-labelledby="chart-title">
+            <div className="panel__head">
+              <span className="label" id="chart-title">Chart</span>
+              <a className="status" href={`https://dexscreener.com/solana/${token.mint}`} target="_blank" rel="noopener noreferrer">DexScreener</a>
+            </div>
+            <iframe
+              className="chart-frame"
+              src={`https://dexscreener.com/solana/${token.mint}?embed=1&loadChartSettings=0&trades=0&tabs=0&info=0&chartLeftToolbar=0&chartTheme=dark&theme=dark&chartStyle=1&chartType=usd&interval=1`}
+              title={`$${token.symbol} price chart`}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              sandbox="allow-scripts allow-same-origin allow-popups"
+            ></iframe>
+          </section>
+        ) : null}
         <div className="split">
           <aside className="split__side">
+            {token.mint && token.status === "live" ? (
+              <section className="panel trade" id="trade-panel" data-symbol={token.symbol} aria-labelledby="trade-title">
+                <div className="panel__head">
+                  <span className="label" id="trade-title">Trade</span>
+                  <a className="status" href={`https://pump.fun/coin/${token.mint}`} target="_blank" rel="noopener noreferrer">pump.fun</a>
+                </div>
+                <div className="panel__body stack stack--tight">
+                  <div className="trade__tabs" role="tablist" aria-label="Buy or sell">
+                    <button className="trade__tab is-buy" type="button" role="tab" data-side="buy" aria-selected="true">Buy</button>
+                    <button className="trade__tab is-sell" type="button" role="tab" data-side="sell" aria-selected="false">Sell</button>
+                  </div>
+                  <div data-for="buy" className="stack stack--tight">
+                    <span className="amount__input">
+                      <input id="trade-sol" inputMode="decimal" placeholder="0.1" aria-label="SOL to spend" autoComplete="off" />
+                      <span>SOL</span>
+                    </span>
+                    <div className="chips">
+                      {["0.1", "0.5", "1", "2"].map((v) => <button className="chip" type="button" data-buy-sol={v} aria-label={`${v} SOL`}>{v}</button>)}
+                    </div>
+                  </div>
+                  <div data-for="sell" className="stack stack--tight" hidden>
+                    <div className="chips">
+                      {[25, 50, 75, 100].map((v) => <button className="chip" type="button" data-sell-pct={String(v)} aria-pressed={String(v === 100)}>{`${v}%`}</button>)}
+                    </div>
+                    <p className="setting-help">Of this coin in your wallet.</p>
+                  </div>
+                  <div className="trade__slippage">
+                    <span className="label label--sm">Slippage</span>
+                    <div className="chips">
+                      {[1, 2, 5, 10, 20].map((v) => <button className="chip chip--sm" type="button" data-slippage={String(v)} aria-pressed={String(v === 5)}>{`${v}%`}</button>)}
+                    </div>
+                  </div>
+                  <button className="btn btn--primary btn--block" type="button" id="trade-go">Connect Wallet</button>
+                  <p className="opt-note" id="trade-message" role="status" aria-live="polite" hidden></p>
+                  <p className="setting-help">Trades on Pump's bonding curve from your own wallet. LaunchSeeds never holds your funds.</p>
+                </div>
+              </section>
+            ) : null}
             <section
               className="panel panel__body--roomy position"
               data-position=""
@@ -275,10 +340,11 @@ export default async function TokenPage({
             >
               <div className="label">Your position</div>
               <div data-when="disconnected" id="holder-disconnected">
-                <h2 className="position-title">Connect to vote</h2>
+                <h2 className="position-title">{sniperCoin ? "Connect your wallet" : "Connect to vote"}</h2>
                 <p className="position-text">
-                  Your vote weighs as much as your gravity. Signing is free;
-                  nothing is sent.
+                  {sniperCoin
+                    ? "See your balance and Gravity: your share of any profit this coin's fund pays to holders. Connecting sends nothing."
+                    : "Your vote weighs as much as your gravity. Signing is free; nothing is sent."}
                 </p>
                 <button
                   className="btn btn--block"
@@ -296,6 +362,7 @@ export default async function TokenPage({
           </aside>
           <div className="split__main split__main--stack">
             <section
+              hidden={sniperCoin}
               className="stack stack--tight"
               aria-labelledby="vote-title"
             >
@@ -360,57 +427,131 @@ export default async function TokenPage({
               </div>
             </section>
 
-            {market.holderRewards ? (
-              <section className="stack stack--tight" aria-labelledby="market-title" id="market-making">
+            {bundle ? (
+              <section
+                className="stack stack--tight"
+                aria-labelledby="sniper-title"
+                id="sniper-bundle"
+                data-mint={token.mint ?? ""}
+                data-owner={process.env.LAUNCHSEEDS_FUND_OWNER_WALLET?.trim() ?? ""}
+                data-launcher={bundle.external ? "" : bundle.launcherWallet ?? ""}
+                data-status={bundle.status}
+              >
                 <div className="ledger-bar">
-                  <h2 className="section-title section-title--sm" id="market-title">Market making</h2>
-                  <span className="status">Public wallet, fixed sell plan</span>
+                  <h2 className="section-title section-title--sm" id="sniper-title">Sniper protection</h2>
+                  <span className="status">{bundleStatus[bundle.status] ?? bundle.status}</span>
                 </div>
                 <p className="setting-help">
-                  Trading fees go to holders automatically through Pump. This coin's launch buy was made by a public
-                  market-making wallet{" "}
-                  {market.wallet ? (
-                    <a className="mono" href={`https://solscan.io/account/${market.wallet}`} target="_blank" rel="noopener noreferrer">{shortAddress(market.wallet)}</a>
-                  ) : "—"}{" "}
-                  that sells only at the market caps below, set at launch and never changed. The profit of each sale
-                  goes to this coin's treasury and buys its rewards for holders.
+                  This coin was created and first bought in one Jito bundle, so no sniper could buy before it.
+                  LaunchSeeds's fund bought {sol(bundle.totalLamports)} from three public wallets. They sell together
+                  once each gets back {bundle.exitTargetPercent}% of its buy{bundle.external
+                    ? <>. The profit of that sale buys this coin back slowly, and everything bought back is burned.</>
+                    : <>{bundle.holdUntil ? <>, or at market at {new Date(bundle.holdUntil).toUTCString().slice(5, 22)} UTC if that hasn't happened</> : null}.
+                      They also sell at market if the fund needs the capital for a new launch, or if the launcher
+                      closes it. Profit stays in the fund until the coin is liquidated, then goes to the fund owner
+                      or to this coin's holders by Gravity.</>}
                 </p>
-                <div className="table-wrap" id="market-plan">
+                <div className="table-wrap">
                   <table className="table">
                     <thead>
                       <tr>
-                        <th scope="col">Sell at market cap</th>
-                        <th scope="col" className="num">Of launch buy</th>
-                        <th scope="col">Status</th>
-                        <th scope="col" className="num">SOL received</th>
-                        <th scope="col" className="num"><span className="sr-only">Transaction</span></th>
+                        <th scope="col">Wallet</th>
+                        <th scope="col" className="num">Bought</th>
+                        <th scope="col" className="num">Tokens</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {market.plan.map((p) => (
-                        <tr className={p.status === "sold" ? "" : "is-pending"}>
-                          <td>${p.marketCapUsd.toLocaleString("en-US")}</td>
-                          <td className="num">{p.percent}%</td>
-                          <td>{p.status === "sold" ? `Sold ${p.at ? `${elapsedText(Date.now() - p.at)} ago` : ""}` : p.status === "selling" ? "Selling…" : "Waiting"}</td>
-                          <td className="num">{p.lamports ? (Number(p.lamports) / 1e9).toFixed(4) : "—"}</td>
-                          <td className="num">{p.signature ? <a href={`https://solscan.io/tx/${p.signature}`} target="_blank" rel="noopener noreferrer">Tx</a> : null}</td>
+                      {bundle.wallets.map((w) => (
+                        <tr>
+                          <td><a className="mono" href={`https://solscan.io/account/${w.wallet}`} target="_blank" rel="noopener noreferrer">{shortAddress(w.wallet)}</a></td>
+                          <td className="num">{sol(w.boughtLamports)}</td>
+                          <td className="num">{w.tokensRaw ? units(w.tokensRaw) : "—"}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                <dl className="dl" id="market-summary">
-                  <dt>Launch buy</dt>
-                  <dd data-num="">{units(market.launchTokensRaw)} ${token.symbol}</dd>
-                  <dt>Still held</dt>
-                  <dd data-num="">{units(market.positionRaw)} ${token.symbol} · cost {sol(market.costLamports)}</dd>
-                  <dt>Realized profit → treasury</dt>
-                  <dd data-num="">{sol(market.realizedLamports)}</dd>
+                <dl className="dl">
+                  <dt>Sell target</dt>
+                  <dd>{bundle.exitTargetPercent}% of each buy</dd>
+                  {bundle.holdUntil ? (
+                    <>
+                      <dt>Time limit</dt>
+                      <dd>{new Date(bundle.holdUntil).toUTCString().slice(5, 22)} UTC</dd>
+                    </>
+                  ) : null}
+                  {bundle.exitSignature ? (
+                    <>
+                      <dt>{{ profit: "Sold at target", rotation: "Sold at market (capital needed)", deadline: "Sold at market (time limit)", close: "Sold at market (closed by the launcher)" }[bundle.exitKind ?? "rotation"]}</dt>
+                      <dd><a href={`https://solscan.io/tx/${bundle.exitSignature}`} target="_blank" rel="noopener noreferrer">Tx</a></dd>
+                    </>
+                  ) : null}
+                  {bundle.proceedsLamports ? (
+                    <>
+                      <dt>Returned to the fund</dt>
+                      <dd data-num="">{sol(bundle.proceedsLamports)} (cost {sol(bundle.costLamports)})</dd>
+                      <dt>Profit</dt>
+                      <dd data-num="">{bundle.profitLamports ? sol(bundle.profitLamports) : "—"}</dd>
+                    </>
+                  ) : null}
+                  {bundle.settlement ? (
+                    <>
+                      <dt>Profit goes to</dt>
+                      <dd>{bundle.settlement === "owner" ? "The fund owner" : "Holders, by Gravity"}</dd>
+                    </>
+                  ) : null}
+                  {bundle.buyback ? (
+                    <>
+                      <dt>Profit buyback</dt>
+                      <dd>
+                        {bundle.buyback.skipped
+                          ? bundle.buyback.skipped
+                          : <>
+                              {bundle.buyback.done} of {bundle.buyback.steps} buys · {sol(bundle.buyback.profitLamports)} of profit, from{" "}
+                              <a className="mono" href={`https://solscan.io/account/${bundle.buyback.wallet}`} target="_blank" rel="noopener noreferrer">{shortAddress(bundle.buyback.wallet)}</a>
+                              <br />
+                              {bundle.buyback.burn?.signature
+                                ? <>Burned {units(bundle.buyback.burn.tokensRaw)} tokens · <a href={`https://solscan.io/tx/${bundle.buyback.burn.signature}`} target="_blank" rel="noopener noreferrer">Tx</a></>
+                                : "Everything bought back is burned after the last buy."}
+                            </>}
+                      </dd>
+                    </>
+                  ) : null}
+                  {bundle.payouts.length ? (
+                    <>
+                      <dt>Payouts</dt>
+                      <dd>
+                        {bundle.payouts.map((p) => (
+                          <span className="payout">
+                            {p.recipients} wallet{p.recipients === 1 ? "" : "s"} · {sol(p.totalLamports)}{" "}
+                            {p.signature ? <a href={`https://solscan.io/tx/${p.signature}`} target="_blank" rel="noopener noreferrer">Tx</a> : p.status}
+                            <br />
+                          </span>
+                        ))}
+                      </dd>
+                    </>
+                  ) : null}
                 </dl>
+                <div id="close-row" hidden>
+                  <div className="label label--sm">You launched this coin</div>
+                  <div className="btn-row">
+                    <button className="btn btn--sm" type="button" id="close-bundle">Close sniper protection</button>
+                  </div>
+                  <p className="setting-help">Sells the three bundle wallets at market now. The proceeds return to LaunchSeeds's fund; you pay nothing.</p>
+                  <p className="opt-note" id="close-message" role="status" hidden></p>
+                </div>
+                <div id="liquidate-row" hidden data-settled={bundle.settlement || bundle.external ? "true" : "false"}>
+                  <div className="label label--sm">Fund owner: liquidate and send this coin's profit to</div>
+                  <div className="btn-row">
+                    <button className="btn btn--sm" type="button" data-liquidate="holders">Holders, by Gravity</button>
+                    <button className="btn btn--sm btn--ghost" type="button" data-liquidate="owner">The owner wallet</button>
+                  </div>
+                  <p className="opt-note" id="liquidate-message" role="status" hidden></p>
+                </div>
               </section>
             ) : null}
 
-            <section className="stack stack--tight" aria-labelledby="rewards-title">
+            <section className="stack stack--tight" aria-labelledby="rewards-title" hidden={sniperCoin}>
               <div className="ledger-bar">
                 <h2 className="section-title section-title--sm" id="rewards-title">Rewards</h2>
                 <span className="status" id="votes-updated">Votes refresh automatically</span>
@@ -471,7 +612,7 @@ export default async function TokenPage({
             </section>
 
             <div className="ledger-pair">
-              <section className="stack stack--tight" aria-labelledby="votes-title">
+              <section className="stack stack--tight" aria-labelledby="votes-title" hidden={sniperCoin}>
                 <h2 className="section-title section-title--sm" id="votes-title">Votes</h2>
                 <div className="table-wrap" id="ledger-votes">
                   <table className="table">

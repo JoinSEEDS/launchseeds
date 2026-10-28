@@ -1,7 +1,8 @@
+import { coinWebsite } from "../../lib/coin-url";
 import { createHash, randomUUID } from "node:crypto";
 import { DESCRIPTION } from "../../lib/strategy";
 import { ApiError } from "../../lib/api-security";
-import { DEFAULT_LAUNCH_SETTINGS, DEFAULT_SELL_PLAN, canonicalLaunchSettings, storedLaunchSettings, type LaunchSettings } from "../domain/launch-settings";
+import { DEFAULT_LAUNCH_SETTINGS, bundleFeeLamports, canonicalLaunchSettings, storedLaunchSettings, type LaunchSettings } from "../domain/launch-settings";
 import { marketMakerWalletName } from "./holder-reward-launch";
 import { Store, safeNumber } from "./store";
 import { canonicalStrategy } from "../domain/strategies";
@@ -51,6 +52,8 @@ export interface LaunchProvider {
       lamports: number;
       confirmedAt: number;
       confirmedSlot: number;
+      /** The wallet the SOL came from (the launcher, when paid from a wallet). */
+      sender?: string;
     }[]
   >;
   prepareDeployment(input: {
@@ -63,7 +66,11 @@ export interface LaunchProvider {
     mintSignerRef: string | null;
     /** Pump holder-reward coin with the launch buy from a public market-making wallet. */
     holderRewards?: boolean;
-  }): Promise<{ intent: string; mintSignerRef: string; marketMaker?: string }>;
+    /** Sniper-protection bundle bought by LaunchSeeds's capital (lamports). */
+    bundleLamports?: number | null;
+    /** Holder-reward coins: creator fees to this wallet instead of to holders. */
+    feesTo?: string | null;
+  }): Promise<{ intent: string; mintSignerRef: string; marketMaker?: string } | { wait: string; mintSignerRef: string }>;
   executeDeployment(intent: string): Promise<{
     status: "pending" | "confirmed" | "expired";
     signature: string;
@@ -71,6 +78,14 @@ export interface LaunchProvider {
   }>;
   /** Must prove the old transaction cannot execute before signing a replacement. */
   refreshDeployment?(intent: string): Promise<string>;
+}
+
+/** The default description, unless the launcher wrote one; the website stays
+ * empty unless the launcher set one (the coin's LaunchSeeds page is used then). */
+export function withLaunchDefaults(raw: LaunchInput): LaunchInput {
+  const description = typeof raw.description === "string" ? raw.description.trim() : "";
+  const website = typeof raw.website === "string" ? raw.website.trim() : "";
+  return { ...raw, description: description || DESCRIPTION, website };
 }
 
 /** Private launch-status handle: unguessable while the CA is secret, and
@@ -99,15 +114,16 @@ export class LaunchService {
     settings: LaunchSettings = DEFAULT_LAUNCH_SETTINGS,
   ) {
     if (!this.provider) throw new Error("Launch service is not configured");
-    const input = launchInput.parse({ ...raw, description: DESCRIPTION });
+    const input = launchInput.parse(withLaunchDefaults(raw));
     if (!/^[a-f0-9]{64}$/.test(capability))
       throw new Error("Invalid launch key");
-    // A holder-reward coin always has a public sell plan; the default ladder if none was chosen.
-    if (settings.holderRewards && !settings.sellPlan.length) settings = { ...settings, sellPlan: [...DEFAULT_SELL_PLAN] };
     const launchSettingsJson = canonicalLaunchSettings(settings);
-    // The market maker's launch buy is the dev buy: a holder-reward coin needs one.
-    if (settings.holderRewards && !(solToLamports(input.devBuySol) > 0))
-      throw new Error("Holder-reward launches need a launch buy for the market maker");
+    // Sniper protection is bought by LaunchSeeds's capital, not by a dev buy.
+    if (settings.bundleLamports && solToLamports(input.devBuySol) > 0)
+      throw new Error("A launch with sniper protection has no separate launch buy");
+    // A reward-fund buy comes from the market-making wallet of a holders' coin.
+    if (settings.feesTo && solToLamports(input.devBuySol) > 0)
+      throw new Error("A coin whose fees go to a wallet has no reward fund");
     const accessHash = hash(capability),
       requestHash = hash(JSON.stringify({ input, settingsJson: launchSettingsJson }));
     const existingId = this.existing(accessHash, requestHash);
@@ -131,7 +147,7 @@ export class LaunchService {
           description: input.description,
           image: input.image,
           metadataUri: null,
-          website: input.website,
+          website: input.website || coinWebsite(mint.mint),
           x: input.x,
           telegram: input.telegram,
           fundingWallet: null,
@@ -198,6 +214,8 @@ export class LaunchService {
       safeInteger(prepared.requiredLamports);
       if (prepared.requiredLamports <= devBuyLamports || !prepared.metadataUri)
         throw new Error("Invalid launch preparation");
+      // The launcher pays the sniper-protection fee (3% of the bundle) on top.
+      const requiredLamports = prepared.requiredLamports + bundleFeeLamports(storedLaunchSettings(claimed.launchSettingsJson).bundleLamports);
       return this.store.repo.tx((tx) => {
         const t = tx.tokens.get(tokenId);
         if (!t || t.leaseId !== leaseId || t.status !== "preparing") return false;
@@ -210,7 +228,7 @@ export class LaunchService {
           rewardWallet: prepared.rewardWallet,
           mintSignerRef: prepared.mintSignerRef,
           metadataUri: prepared.metadataUri,
-          requiredLamports: String(prepared.requiredLamports),
+          requiredLamports: String(requiredLamports),
           devBuyLamports: String(devBuyLamports),
           quoteExpiresAt: now + 30 * 60_000,
           activeStrategyId: state.initialStrategyId,
@@ -250,7 +268,7 @@ export class LaunchService {
   ) {
     if (!this.provider || !/^[a-f0-9]{64}$/.test(capability))
       throw new ApiError("Invalid launch amendment", 401);
-    const input = launchInput.parse({ ...raw, description: DESCRIPTION });
+    const input = launchInput.parse(withLaunchDefaults(raw));
     const launchSettingsJson = canonicalLaunchSettings(settings);
     const leaseId = crypto.randomUUID();
     const now = Date.now();
@@ -318,10 +336,10 @@ export class LaunchService {
         });
         tx.tokens.updateUnfundedDetails(tokenId, {
           name: input.name, symbol: input.symbol, description: input.description,
-          image: input.image, website: input.website,
+          image: input.image, website: input.website || coinWebsite(token.mint ?? token.mintSignerRef!.replace(/^launchseeds-mint-/, "")),
           x: input.x || "", telegram: input.telegram || "",
           metadataUri: prepared.metadataUri,
-          requiredLamports: String(prepared.requiredLamports),
+          requiredLamports: String(prepared.requiredLamports + bundleFeeLamports(storedLaunchSettings(launchSettingsJson).bundleLamports)),
           devBuyLamports: String(devBuyLamports),
           launchSettingsJson,
           // A revised quote gets a fresh 30-minute window, like a new one.
@@ -432,6 +450,10 @@ export class LaunchService {
             refundSignature: null,
           });
         }
+        // The wallet that paid first is the launcher: it may close the coin's
+        // sniper protection from the coin page.
+        const first = [...deposits].sort((a, b) => a.confirmedSlot - b.confirmedSlot).find((d) => d.sender);
+        if (first?.sender) tx.tokens.recordLauncher(tokenId, first.sender);
         tx.tokens.update(tokenId, {
           fundingReceivedLamports: tx.deposits.sumLamports(tokenId).toString(),
         });
@@ -450,12 +472,19 @@ export class LaunchService {
         devBuyLamports: safeNumber(token.devBuyLamports),
         mintSignerRef: token.mintSignerRef,
         holderRewards: storedLaunchSettings(token.launchSettingsJson).holderRewards,
+        bundleLamports: storedLaunchSettings(token.launchSettingsJson).bundleLamports,
+        feesTo: storedLaunchSettings(token.launchSettingsJson).feesTo,
       });
       assertLease();
+      // Sniper-protection capital is being freed (an earlier coin is selling): next round.
+      if ("wait" in prepared) {
+        this.store.repo.tokens.updateLaunch(tokenId, { error: prepared.wait.slice(0, 500) });
+        return;
+      }
       this.store.repo.tx((tx) => {
         const current = tx.tokens.get(tokenId)!;
         if (current.status !== "funding") return;
-        tx.tokens.updateLaunch(tokenId, { intent: prepared.intent });
+        tx.tokens.updateLaunch(tokenId, { intent: prepared.intent, error: null });
         tx.tokens.update(tokenId, { mintSignerRef: prepared.mintSignerRef });
         // The public market-making wallet receives the launch buy.
         if (prepared.marketMaker) tx.tokens.assignMarketMaker(tokenId, prepared.marketMaker);

@@ -53,6 +53,10 @@ describe("launch policy storage", () => {
       liquidity: null,
       holderRewards: false,
       sellPlan: [],
+      bundleLamports: null,
+      bundleExitPercent: 102,
+      bundleMaxHoldMs: null,
+      feesTo: null,
     });
     expect(Object.isFrozen(DEFAULT_LAUNCH_SETTINGS)).toBe(true);
     // Launches stored before holder rewards existed read as ordinary launches.
@@ -195,7 +199,7 @@ describe("fee allocation, liquidity range and enforcement", () => {
   test("creators may choose sniper protection and liquidity before the executors exist", () => {
     expect(parseLaunchSettings(DEFAULT_LAUNCH_SETTINGS).sniperSeconds).toBe(30);
     expect(parseLaunchSettings({ ...DEFAULT_LAUNCH_SETTINGS, sniperSeconds: null, liquidity: null }))
-      .toEqual({ firstStrategyLockMs: day, minimumActiveMs: hour, sniperSeconds: null, liquidity: null, holderRewards: false, sellPlan: [] });
+      .toEqual({ firstStrategyLockMs: day, minimumActiveMs: hour, sniperSeconds: null, liquidity: null, holderRewards: false, sellPlan: [], bundleLamports: null, bundleExitPercent: 102, bundleMaxHoldMs: null, feesTo: null });
   });
   test("human-facing names are deterministic", () => {
     expect(sniperDescription(DEFAULT_LAUNCH_SETTINGS)).toBe("30s puzzle");
@@ -210,3 +214,4 @@ describe("fee allocation, liquidity range and enforcement", () => {
     expect(humanRemaining(42*60_000)).toBe("Can change in 42m");
   });
 });
+

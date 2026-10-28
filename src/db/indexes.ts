@@ -29,6 +29,9 @@ export const INDEXES = [
   "CREATE INDEX IF NOT EXISTS stock_wins_open ON stockWins(tokenId, status)",
   "CREATE UNIQUE INDEX IF NOT EXISTS mm_trades_intent ON mmTrades(intentKey)",
   "CREATE INDEX IF NOT EXISTS mm_trades_token ON mmTrades(tokenId, createdAt)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS launch_bundles_token ON launchBundles(tokenId)",
+  "CREATE INDEX IF NOT EXISTS launch_bundles_status ON launchBundles(status)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS bundle_payouts_batch ON bundlePayouts(tokenId, batch)",
     "CREATE UNIQUE INDEX IF NOT EXISTS draw_revision_pending ON drawRevisions(executionId) WHERE completedAt = 0",
   "CREATE INDEX IF NOT EXISTS deposits_token ON deposits(tokenId)",
   "CREATE UNIQUE INDEX IF NOT EXISTS holders_identity ON holders(tokenId, wallet)",
@@ -59,4 +62,5 @@ export const INDEXES = [
      WHERE status IN ('preparing','swap_submitted','swap_confirmed','burn_submitted')`,
   "CREATE INDEX IF NOT EXISTS tokenBuybacks_due ON tokenBuybacks(status, nextAttemptAt)",
   "CREATE UNIQUE INDEX IF NOT EXISTS tokenBuybacks_request ON tokenBuybacks(requestKey) WHERE requestKey IS NOT NULL",
+  "CREATE UNIQUE INDEX IF NOT EXISTS publicPageSnapshots_key ON publicPageSnapshots(key)",
 ] as const;

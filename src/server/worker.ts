@@ -8,6 +8,7 @@ import type { FeeClaimer } from "./fee-claimer";
 import type { PackExecutor } from "./pack-executor";
 import type { StockExecutor } from "./stock-executor";
 import type { MarketMaker } from "./market-maker";
+import type { BundleEngine } from "./bundle-engine";
 import { marketMakerWalletName } from "./holder-reward-launch";
 import { storedLaunchSettings } from "../domain/launch-settings";
 
@@ -28,6 +29,8 @@ export async function runCycle(input: {
   packs?: PackExecutor;
   stocks?: StockExecutor;
   market?: MarketMaker;
+  /** Sniper-protection bundles ([launchseeds] launch_bundles): fills, exits, sweeps. */
+  bundles?: BundleEngine;
 }) {
   return measure("worker cycle", async () => {
     const errors: { tokenId: number; operation: string; error: string }[] = [];
@@ -100,6 +103,11 @@ export async function runCycle(input: {
         });
       });
     }
+    if (input.bundles)
+      await attempt(0, "sniper-protection bundles", async () => {
+        for (const line of await input.bundles!.tick((id) => input.store.repo.tokens.get(id) ?? null))
+          if (!/holding: not every wallet|waiting for the launch|done$/.test(line)) console.log(`Bundle ${line}`);
+      });
     return { errors };
   });
 }

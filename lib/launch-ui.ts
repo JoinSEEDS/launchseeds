@@ -1,6 +1,7 @@
+import { coinPath } from "./coin-url";
 import type { LaunchSettings } from "../src/domain/launch-settings";
 import { MAX_TOKEN_IMAGE_BYTES, TOKEN_IMAGE_SIZE_ERROR } from "./media-policy";
-import { validTelegram, normalizeX } from "./launch-socials";
+import { validTelegram, normalizeX, validX } from "./launch-socials";
 import { DESCRIPTION, type Strategy } from "./strategy";
 
 /** Public statuses exposed by the canonical launch service. */
@@ -30,6 +31,9 @@ export interface LaunchFormFields {
   name: string;
   symbol: string;
   devBuySol: string;
+  /** Empty: the default description. */
+  description?: string;
+  /** Empty: the coin's own LaunchSeeds page. */
   website: string;
   x: string;
   telegram: string;
@@ -162,11 +166,14 @@ export function validateLaunchFields(fields: LaunchFormFields): string | null {
   if (parseSol(fields.devBuySol) === null) {
     return "Enter a valid initial reward fund amount in SOL, with up to nine decimals.";
   }
+  if ((fields.description ?? "").trim().length > 500) {
+    return "Keep the description under 500 characters.";
+  }
   if (fields.website.trim() && !/^https:\/\/[^\s]+$/i.test(fields.website.trim())) {
     return "Website must begin with https://.";
   }
-  if (fields.x.trim() && !/^@?[A-Za-z0-9_]{1,15}$/.test(normalizeX(fields.x))) {
-    return "Enter a valid X handle.";
+  if (!validX(fields.x)) {
+    return "Enter an X handle or an X profile, community or post link, or leave it blank.";
   }
   if (!validTelegram(fields.telegram)) {
     return "Enter a Telegram handle or t.me link, or leave it blank.";
@@ -179,7 +186,7 @@ export function buildLaunchPayload(fields: LaunchFormFields) {
   return {
     name: fields.name.trim(),
     symbol: fields.symbol.trim().toUpperCase(),
-    description: DESCRIPTION,
+    description: fields.description?.trim() || DESCRIPTION,
     image: fields.image,
     website: fields.website.trim(),
     x: normalizeX(fields.x),
@@ -197,7 +204,7 @@ export function launchUrl(handle: string): string | null {
 
 /** Token pages are addressed by CA, which only exists once the token is live. */
 export function publicTokenUrl(mint: string): string | null {
-  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint) ? `/token/${encodeURIComponent(mint)}` : null;
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint) ? coinPath(mint) : null;
 }
 
 /** Guard against malformed responses from reverse proxies or failed migrations. */

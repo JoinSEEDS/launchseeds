@@ -1,3 +1,4 @@
+import { coinWebsite } from "../lib/coin-url";
 import { publicRouteError } from "../src/server/route-errors";
 import { expect,test } from "bun:test";
 import { mkdtempSync,writeFileSync } from "node:fs";
@@ -19,7 +20,7 @@ test("Solard IPFS upload is persisted and reused without an application URL",asy
  writeFileSync(join(folder,`${digest}.png`),bytes);
  const store=new Store(openLaunchseedsData(":memory:"));
  let uploads=0;
- const upload:MetadataUploader=async(input,opts)=>{uploads++;expect(input.imagePath).toBe(join(folder,`${digest}.png`));expect(input.twitter).toBe("@launchseeds");expect(opts).toEqual({provider:"pump-frontend",fallback:null});return {metadataUri:"ipfs://bafytestmetadata"};};
+ const upload:MetadataUploader=async(input,opts)=>{uploads++;expect(input.imagePath).toBe(join(folder,`${digest}.png`));expect(input.twitter).toBe("@launchseeds");expect(input.website).toBe(coinWebsite(mint));expect(opts).toEqual({provider:"pump-frontend",fallback:null});return {metadataUri:"ipfs://bafytestmetadata"};};
  const wallets:{name:string;address:string}[]=[];
  const add=(name:string,address:string)=>{wallets.push({name,address});return {name,address};};
  const sdk={listWallets:()=>wallets,
@@ -43,7 +44,7 @@ test("Solard IPFS upload is persisted and reused without an application URL",asy
   expect(store.repo.tokens.get(tokenId)?.metadataUri).toBe("ipfs://bafytestmetadata");
   const again=await provider.prepare(input);expect(uploads).toBe(1);
   // Both wallets are named by the CA and reused on retry, never regenerated.
-  expect(wallets.map((w)=>w.name).sort()).toEqual([`launchseeds-${mint}`,`launchseeds-mint-${mint}`]);
+  expect(wallets.map((w)=>w.name).sort()).toEqual([`launchseeds-${mint}`,`launchseeds-mint-${mint}`].sort());
   expect(again.fundingWalletName).toBe(`launchseeds-${mint}`);
   expect(again.mintSignerRef).toBe(`launchseeds-mint-${mint}`);
   writeFileSync(join(folder,`${digest}.png`),"tampered");

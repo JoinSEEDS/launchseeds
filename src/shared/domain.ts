@@ -1,4 +1,4 @@
-import { validTelegram, normalizeX } from "../../lib/launch-socials";
+import { validTelegram, normalizeX, validX } from "../../lib/launch-socials";
 import { createHash } from "node:crypto";
 import { z } from "sqlite-zod-orm";
 /** Mainnet USDC mint; never infer a treasury balance from another mint. */
@@ -43,8 +43,8 @@ export const launchInput = z.object({
     .max(100)
     .default("")
     .refine(
-      (v) => !v || /^@?[A-Za-z0-9_]{1,15}$/.test(normalizeX(v)),
-      "Enter an X handle such as @launchseeds",
+      (v) => validX(v),
+      "Enter an X handle or an X profile, community or post link",
     )
     .transform(normalizeX),
   telegram: z

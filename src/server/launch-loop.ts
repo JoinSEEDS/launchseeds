@@ -2,13 +2,16 @@ import {createMeasure} from "measure-fn";
 import {hasStrategy} from "../../lib/governance";
 import type {Store} from "./store";
 import type {LaunchService} from "./launch";
+import type {BundleEngine} from "./bundle-engine";
 const {measure}=createMeasure("launchseeds:launch");
 export type LaunchCycleResult={errors:Array<{tokenId:number;operation:string;error:string}>};
 /** Launch RPC work is independent of holder snapshots and governance cadence. */
-export async function runLaunchCycle(input:{store:Store;launch:LaunchService}):Promise<LaunchCycleResult>{
+export async function runLaunchCycle(input:{store:Store;launch:LaunchService;bundles?:BundleEngine}):Promise<LaunchCycleResult>{
  return measure("launch cycle",async()=>{
   const pending=input.store.repo.tokens.all().filter(t=>["preparing","funding","deploying"].includes(t.status)&&t.leaseUntil<=Date.now());
   const errors:LaunchCycleResult["errors"]=[];
+  if(input.bundles) for(const line of await input.bundles.tick(id=>input.store.repo.tokens.get(id)??null))
+    if(!/holding: not every wallet|waiting for the launch|done$/.test(line))console.log(`Bundle ${line}`);
   const funding=pending.filter(t=>t.status==="funding");
   let funded:Set<string>|undefined;
   if(funding.length&&input.launch.provider?.fundedWallets){

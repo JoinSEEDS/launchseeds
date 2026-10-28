@@ -6,7 +6,9 @@ import {
   trackWalletProvider,
 } from "../../../lib/wallet-session";
 import bs58 from "bs58";
+import { sendWalletTransaction } from "../../../lib/wallet-transaction";
 import { cardClaimMessage } from "../../../lib/card-claim";
+import { closeMessage, liquidateMessage } from "../../../src/server/bundle-view";
 import {
   createStrategyBuilder,
   StrategyLabel,
@@ -53,6 +55,8 @@ type HolderSnapshot = {
   mint: string;
   symbol: string;
   leaderboard: { holders: (Position & { heldSince: number; probability: number })[] };
+  /** Eligible raffle holders (LaunchSeeds's own wallets left out). */
+  raffle?: { holders: (Position & { heldSince: number; probability: number })[] };
 };
 
 type VoteChallenge = { nonce: string; message: string; expiresAt: number };
@@ -171,6 +175,7 @@ export default function mount() {
   };
 
   function paintPosition() {
+    paintLiquidate();
     if (!wallet || !position) {
       render(null, positionRoot);
       positionRoot.hidden = true;
@@ -202,7 +207,7 @@ export default function mount() {
         <dl className="dl">
           <dt>Indexed balance</dt>
           <dd data-num="">{formatGravity(snapshot.balance)}</dd>
-          <dt>Voting gravity</dt>
+          <dt>Gravity</dt>
           <dd data-num="">{formatGravity(snapshot.gravity)}</dd>
           <dt>Eligible share</dt>
           <dd data-num="">{share}</dd>
@@ -338,20 +343,16 @@ export default function mount() {
       element<HTMLElement>("treasury-fees").textContent = microsToUsd(fees);
       element<HTMLElement>("treasury-fees-row").hidden = false;
     }
-    needed.textContent =
-      result.quote.costMicros === null
-        ? "Awaiting price"
-        : `of ${microsToUsd(result.quote.costMicros)}`;
-    deficit.textContent =
-      result.deficitMicros === null
-        ? "Awaiting a fresh quote"
-        : `${microsToUsd(result.deficitMicros)} to go`;
-    progress.setAttribute(
-      "aria-valuenow",
-      String(Math.floor(result.progressPercent ?? 0)),
-    );
-    const bar = progress.querySelector<HTMLElement>("i");
-    if (bar) bar.style.width = `${result.progressPercent ?? 0}%`;
+    // A failed/expired execution quote must not erase the published display target.
+    if (result.quote.costMicros !== null) {
+      needed.textContent = `of ${microsToUsd(result.quote.costMicros)}`;
+      const remaining = Math.max(0, result.quote.costMicros - result.recordedAvailableMicros);
+      deficit.textContent = `${microsToUsd(remaining)} to go`;
+      const percent = result.quote.costMicros > 0 ? Math.min(100,100*result.recordedAvailableMicros/result.quote.costMicros) : 0;
+      progress.setAttribute("aria-valuenow",String(Math.floor(percent)));
+      const bar=progress.querySelector<HTMLElement>("i");
+      if(bar)bar.style.width=`${percent}%`;
+    }
     // Funding validation stays server-side; do not surface data-source status in the UI.
     note.textContent = "";
   }
@@ -436,8 +437,9 @@ export default function mount() {
     if (freshPosition?.wallet === requestedWallet) position = freshPosition;
     paintBoard();
     const ledger = document.getElementById("gravity-ledger-body");
-    if (ledger && snapshot.mint === mint && Array.isArray(snapshot.leaderboard?.holders)) {
-      const holders = snapshot.leaderboard.holders.slice(0, 100);
+    const ranked = snapshot.raffle ?? snapshot.leaderboard;
+    if (ledger && snapshot.mint === mint && Array.isArray(ranked?.holders)) {
+      const holders = ranked.holders.slice(0, 100);
       render(<>{holders.length ? holders.map((holder) => (
         <tr>
           <td><span className="cell-2"><span className="mono mono--md" title={holder.wallet}>{shortWallet(holder.wallet)}</span>
@@ -733,10 +735,169 @@ export default function mount() {
   };
   rewards?.addEventListener("click", onClaim);
 
+  // Fund owner only: liquidate this coin's sniper-protection bundle now. The
+  // server checks the signature and the owner wallet; anyone else sees nothing.
+  const sniper = document.getElementById("sniper-bundle");
+  const liquidateRow = document.getElementById("liquidate-row");
+  const liquidateRowEl = document.getElementById("liquidate-row");
+  const liquidateNote = document.getElementById("liquidate-message");
+  // Looks its elements up itself: the holder panel can paint before this runs.
+  function paintLiquidate() {
+    const box = document.getElementById("sniper-bundle");
+    const row = document.getElementById("liquidate-row");
+    if (!box || !row) return;
+    const owner = box.dataset.owner || "";
+    // Holding (sell now) or sold with the profit still in the fund (settle).
+    const open = box.dataset.status === "holding" || box.dataset.status === "closed";
+    row.hidden = !(owner && wallet === owner && open && row.dataset.settled !== "true");
+    // The launcher may close a holding bundle.
+    const close = document.getElementById("close-row");
+    const launcher = box.dataset.launcher || "";
+    if (close) close.hidden = !(launcher && wallet === launcher && box.dataset.status === "holding");
+  }
+  const onClose = async () => {
+    const box = document.getElementById("sniper-bundle");
+    const button = document.getElementById("close-bundle") as HTMLButtonElement | null;
+    const note = document.getElementById("close-message");
+    if (!box || !button || !note || button.disabled) return;
+    if (!confirm("Sell this coin's sniper-protection bundle at market now?")) return;
+    const coin = box.dataset.mint!;
+    button.disabled = true;
+    note.hidden = false;
+    try {
+      if (!wallet || !provider) throw new Error("Connect the wallet you paid for the launch from.");
+      setMessage(note, "Sign the close in your wallet. It is free and sends nothing.");
+      const issuedAt = Date.now();
+      const signed = await provider.signMessage(new TextEncoder().encode(closeMessage(coin, wallet, issuedAt)), "utf8");
+      setMessage(note, "Selling…");
+      const result = await postJson<{ result: string }>(
+        `/api/tokens/${encodeURIComponent(coin)}/bundle`,
+        { action: "close", wallet, issuedAt, signature: bs58.encode(signed.signature) },
+        { timeoutMs: 120_000 },
+      );
+      setMessage(note, `Closed: ${result.result}. Reload in a minute to see the sale.`);
+      box.dataset.status = "exiting";
+      button.hidden = true;
+    } catch (error) {
+      button.disabled = false;
+      setMessage(note, errorText(error), true);
+    }
+  };
+  document.getElementById("close-bundle")?.addEventListener("click", onClose);
+
+  // Trade: the server quotes and simulates an unsigned Pump trade for the
+  // connected wallet; the wallet signs and sends it.
+  const tradePanel = document.getElementById("trade-panel");
+  const tradeGo = document.getElementById("trade-go") as HTMLButtonElement | null;
+  const tradeMessage = document.getElementById("trade-message");
+  const tradeSol = document.getElementById("trade-sol") as HTMLInputElement | null;
+  let side: "buy" | "sell" = "buy";
+  const pressedIn = (attribute: string) =>
+    tradePanel?.querySelector<HTMLElement>(`[${attribute}][aria-pressed="true"]`)?.getAttribute(attribute) ?? "";
+  function paintTrade() {
+    if (!tradePanel || !tradeGo) return;
+    tradePanel.querySelectorAll<HTMLElement>("[data-side]").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.side === side)));
+    tradePanel.querySelectorAll<HTMLElement>("[data-for]").forEach((part) => (part.hidden = part.dataset.for !== side));
+    const symbol = tradePanel.dataset.symbol ?? "";
+    tradeGo.textContent = !wallet ? "Connect Wallet" : side === "buy" ? `Buy $${symbol}` : `Sell $${symbol}`;
+    tradeGo.classList.toggle("btn--danger", !!wallet && side === "sell");
+  }
+  const onTradeClick = async (event: Event) => {
+    const target = event.target as HTMLElement | null;
+    const tab = target?.closest<HTMLElement>("[data-side]");
+    if (tab) { side = tab.dataset.side === "sell" ? "sell" : "buy"; paintTrade(); return; }
+    const chip = target?.closest<HTMLButtonElement>("[data-buy-sol],[data-sell-pct],[data-slippage]");
+    if (chip) {
+      if (chip.dataset.buySol && tradeSol) { tradeSol.value = chip.dataset.buySol; tradeSol.focus(); return; }
+      const group = chip.dataset.sellPct ? "data-sell-pct" : "data-slippage";
+      tradePanel!.querySelectorAll<HTMLElement>(`[${group}]`).forEach((c) => c.setAttribute("aria-pressed", String(c === chip)));
+    }
+  };
+  const onTrade = async () => {
+    if (!tradeGo || !tradeMessage || tradeGo.disabled) return;
+    tradeGo.disabled = true;
+    tradeMessage.hidden = false;
+    try {
+      if (!wallet || !provider) {
+        setMessage(tradeMessage, "Connecting…");
+        await connectWallet();
+        setMessage(tradeMessage, "");
+        tradeMessage.hidden = true;
+        return;
+      }
+      const slippage = Number(pressedIn("data-slippage")) || 5;
+      const order = side === "buy"
+        ? { side, sol: tradeSol?.value.trim() ?? "" }
+        : { side, percent: Number(pressedIn("data-sell-pct")) || 100 };
+      if (side === "buy" && !(Number((order as { sol: string }).sol) > 0)) throw new Error("Enter an amount of SOL to buy.");
+      setMessage(tradeMessage, "Getting a quote…");
+      const quote = await postJson<{ transaction: string; lamports: string; tokensRaw: string; limitLamports: string; decimals: number }>(
+        `/api/tokens/${encodeURIComponent(mint)}/trade`, { wallet, slippage, ...order }, { timeoutMs: 30_000 },
+      );
+      const tokens = (Number(quote.tokensRaw) / 10 ** quote.decimals).toLocaleString("en-US", { maximumFractionDigits: 0 });
+      const sol = (lamports: string) => `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
+      setMessage(tradeMessage, side === "buy"
+        ? `About ${tokens} $${tradePanel?.dataset.symbol} for ${sol(quote.lamports)} (at most ${sol(quote.limitLamports)}). Confirm in your wallet.`
+        : `${tokens} $${tradePanel?.dataset.symbol} for about ${sol(quote.lamports)} (at least ${sol(quote.limitLamports)}). Confirm in your wallet.`);
+      const signature = await sendWalletTransaction(quote.transaction);
+      tradeMessage.replaceChildren(
+        document.createTextNode(side === "buy" ? "Buy sent. " : "Sell sent. "),
+        Object.assign(document.createElement("a"), { href: `https://solscan.io/tx/${signature}`, target: "_blank", rel: "noopener noreferrer", textContent: "View transaction" }),
+      );
+      tradeMessage.classList.remove("is-error");
+    } catch (error) {
+      setMessage(tradeMessage, errorText(error), true);
+    } finally {
+      tradeGo.disabled = false;
+      paintTrade();
+    }
+  };
+  tradePanel?.addEventListener("click", onTradeClick);
+  tradeGo?.addEventListener("click", onTrade);
+  window.addEventListener("launchseeds:wallet", paintTrade);
+  window.addEventListener("launchseeds:wallet-disconnected", paintTrade);
+  paintTrade();
+  const onLiquidate = async (event: Event) => {
+    const liquidateButton = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-liquidate]");
+    if (!sniper || !liquidateButton || !liquidateNote || liquidateButton.disabled) return;
+    const coin = sniper.dataset.mint!;
+    const profitTo = liquidateButton.dataset.liquidate as "owner" | "holders";
+    const target = profitTo === "owner" ? "the owner wallet" : "this coin's holders by Gravity";
+    const action = sniper.dataset.status === "holding" ? "Sell this coin's bundle at market now, sweep it back to the fund, and send its profit to" : "Send this coin's profit to";
+    if (!confirm(`${action} ${target}?`)) return;
+    liquidateButton.disabled = true;
+    liquidateNote.hidden = false;
+    try {
+      if (!wallet || !provider) throw new Error("Connect the fund owner wallet first.");
+      setMessage(liquidateNote, "Sign the liquidation in your wallet. It is free and sends nothing.");
+      const issuedAt = Date.now();
+      const signed = await provider.signMessage(new TextEncoder().encode(liquidateMessage(coin, wallet, issuedAt, profitTo)), "utf8");
+      setMessage(liquidateNote, "Selling…");
+      const result = await postJson<{ result: string }>(
+        `/api/tokens/${encodeURIComponent(coin)}/bundle`,
+        { wallet, issuedAt, profitTo, signature: bs58.encode(signed.signature) },
+        { timeoutMs: 120_000 },
+      );
+      setMessage(liquidateNote, `Liquidation: ${result.result}. The fund settles it within a few minutes; reload to see the payouts.`);
+      sniper.dataset.status = "exiting";
+      liquidateRowEl?.querySelectorAll<HTMLButtonElement>("[data-liquidate]").forEach((b) => (b.hidden = true));
+    } catch (error) {
+      liquidateButton.disabled = false;
+      setMessage(liquidateNote, errorText(error), true);
+    }
+  };
+  liquidateRowEl?.addEventListener("click", onLiquidate);
+
   void initialize();
   return () => {
     destroyed = true;
     rewards?.removeEventListener("click", onClaim);
+    liquidateRowEl?.removeEventListener("click", onLiquidate);
+    document.getElementById("close-bundle")?.removeEventListener("click", onClose);
+    tradePanel?.removeEventListener("click", onTradeClick);
+    tradeGo?.removeEventListener("click", onTrade);
+    window.removeEventListener("launchseeds:wallet", paintTrade);
+    window.removeEventListener("launchseeds:wallet-disconnected", paintTrade);
     generation++;
     poller?.stop();
     treasuryPoller?.stop();

@@ -1,32 +1,29 @@
+import { storedHomeObservations } from "../src/server/home-snapshot";
 import { getStore } from "../src/server/runtime";
-import { getCatalog } from "../src/server/catalog";
-import { strategyBoard } from "../lib/governance";
+import { presentConfig } from "../lib/governance";
 import { strategyName } from "../lib/strategy";
-import { quoteStrategy } from "../lib/treasury-readiness";
+import { displayStrategyCostMicros, holderFeesMicros } from "../lib/reward-funding";
+import { storedLaunchSettings } from "../src/domain/launch-settings";
 import { initials } from "../lib/format";
-import {
-  getTokenMarketCap,
-  getMintMarketCap,
-} from "../src/server/token-market";
-import { mapLimited } from "../lib/async-batch";
-import { unclaimedFeesSoon } from "../src/server/creator-fees";
 
-export default async function HomePage() {
-  const store = getStore();
+export default function HomePage() { return renderHomePage(getStore()); }
+
+export function renderHomePage(store: ReturnType<typeof getStore>) {
   const tokens = store.listLive();
-  const [catalog, tokenCap] = await Promise.all([
-    getCatalog().catch(() => null),
-    getTokenMarketCap().catch(() => null),
-  ]);
+  const { catalog, tokenCap, capPairs } = storedHomeObservations(store);
   const items = tokens.map((token) => {
-    const board = strategyBoard(token.id),
-      active = board?.active;
-    const quote = active ? quoteStrategy(active, catalog, Date.now()) : null;
-    const cost = quote?.costMicros ?? null;
-    const available = Math.max(
+    const raw = store.repo.tokens.get(token.id);
+    const strategy = raw?.activeStrategyId ? store.repo.strategies.get(raw.activeStrategyId) : null;
+    const active = strategy ? presentConfig(strategy.configJson) : undefined;
+    const board = active ? { active, switchedAt: store.repo.operations.state(token.id)?.switchedAt ?? 0 } : null;
+    const holderRewards = storedLaunchSettings(raw?.launchSettingsJson).holderRewards;
+    const cost = active && !holderRewards ? displayStrategyCostMicros(active, catalog, active.type === "pack" ? store.repo.packs.get(active.ref)?.priceUsdCents : undefined) : null;
+    const fees = capPairs.find(row => row.id === token.id)?.fees ?? null;
+    const claimed = Math.max(
       0,
       token.collectedMicros - token.spentMicros - token.reservedMicros,
     );
+    const available = claimed + (holderRewards ? 0 : holderFeesMicros(fees ?? 0, raw?.launchSettingsJson ?? ""));
     const progress =
       cost && cost > 0 ? Math.min(100, (100 * available) / cost) : 0;
     return {
@@ -35,26 +32,21 @@ export default async function HomePage() {
       active,
       cost,
       available,
+      claimed,
+      fundingKnown: fees !== null || claimed > 0,
       progress,
+      holderRewards,
       holders: store.leaderboard(token.id).holders.length,
     };
-  });
-  // Bound concurrent RPC reads; only real pool-derived prices and actual mint
-  // supply can produce a market cap. Never fill the table with sample prices.
-  const capPairs = await mapLimited(items, 4, async ({ token }) => {
-    const [cap, fees] = await Promise.all([
-      getMintMarketCap(token.mint, token.priceUsd),
-      unclaimedFeesSoon(token),
-    ]);
-    return { id: token.id, cap, fees };
   });
   const marketCaps = new Map(capPairs.map((row) => [row.id, row.cap]));
   // Recorded treasury credit plus creator fees still unclaimed in on-chain vaults.
   const sum =
-    items.reduce((n, row) => n + row.available, 0) +
+    items.reduce((n, row) => n + row.claimed, 0) +
     capPairs.reduce((n, row) => n + (row.fees ?? 0), 0);
+  const sumKnown = items.some(row => row.claimed > 0) || capPairs.some(row => row.fees !== null);
   const best = items
-    .filter((row) => row.cost !== null)
+    .filter((row) => !row.holderRewards && row.cost !== null && row.fundingKnown)
     .sort((a, b) => b.progress - a.progress)[0];
   return (
     <main className="page">
@@ -91,7 +83,7 @@ export default async function HomePage() {
           <div className="kv">
             <div>
               <div className="label label--sm">Fees accumulated</div>
-              <div className="kv__value" data-num="">${(sum / 1e6).toFixed(2)}</div>
+              <div className="kv__value" data-num="">{sumKnown ? `$${(sum / 1e6).toFixed(2)}` : "—"}</div>
             </div>
             <div className="kv__item--end">
               <div className="label label--sm">Live treasuries</div>
@@ -101,7 +93,7 @@ export default async function HomePage() {
           <a
             className="panel__foot"
             href={
-              best ? `/token/${encodeURIComponent(best.token.mint ?? "")}` : "/launch"
+              best ? `/coin/${encodeURIComponent(best.token.mint ?? "")}` : "/launch"
             }
           >
             <span>
@@ -234,10 +226,12 @@ export default async function HomePage() {
                       available,
                       progress,
                       holders,
+                      holderRewards,
+                      fundingKnown,
                     }) => (
                       <tr
                         className="is-link"
-                        data-href={`/token/${encodeURIComponent(token.mint ?? "")}`}
+                        data-href={`/coin/${encodeURIComponent(token.mint ?? "")}`}
                         data-progress={String(progress)}
                         data-created={String(token.createdAt)}
                         data-switched={String(board?.switchedAt || 0)}
@@ -246,7 +240,7 @@ export default async function HomePage() {
                         <td>
                           <a
                             className="token"
-                            href={`/token/${encodeURIComponent(token.mint ?? "")}`}
+                            href={`/coin/${encodeURIComponent(token.mint ?? "")}`}
                           >
                             <span
                               className="av"
@@ -272,18 +266,19 @@ export default async function HomePage() {
                         </td>
                         <td>
                           <span className="strategy-inline">
-                            {active
+                            {holderRewards ? "Holder rewards" : active
                               ? strategyName(active, catalog || undefined)
                               : "—"}
                           </span>
                         </td>
                         <td>
+                          {holderRewards ? <span className="dim">Fees paid in SOL by Pump</span> : <>
                           <span className="meter">
                             <span className="bar">
                               <i style={{ width: `${progress}%` }} />
                             </span>
                             <b>
-                              {cost === null ? "—" : `${Math.round(progress)}%`}
+                              {cost === null || !fundingKnown ? "—" : `${Math.round(progress)}%`}
                             </b>
                           </span>
                           <span
@@ -294,10 +289,12 @@ export default async function HomePage() {
                               marginTop: "3px",
                             }}
                           >
-                            {cost === null
-                              ? "Live quote unavailable"
-                              : `$${(available / 1e6).toFixed(2)} of $${(cost / 1e6).toFixed(2)}`}
+                            {cost === null || !fundingKnown
+                              ? "—"
+                              : `Funded $${(available / 1e6).toFixed(2)} · Reward $${(cost / 1e6).toFixed(2)}`}
                           </span>
+                          {cost !== null && fundingKnown && available > cost ? <span className="dim" style={{ display: "block", fontSize: "11px" }}>Surplus ${((available - cost) / 1e6).toFixed(2)}</span> : null}
+                          </>}
                         </td>
                         <td className="num">
                           {marketCaps.get(token.id) ?? "—"}
