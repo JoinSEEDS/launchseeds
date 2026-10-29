@@ -1,4 +1,5 @@
 import { render } from "tradjs/client";
+import { protectionOptions, PROTECTION_BUDGET_MAX_AGE } from "../../lib/protection-options";
 import {
   parseLaunchSettings,
   feeSplit,
@@ -53,6 +54,7 @@ type Config = {
   imageGeneration?: boolean;
   /** Sniper protection (LaunchSeeds-funded launch bundle) is available. */
   sniperBundles?: boolean;
+  protectionBudget?: { maxLamports: number; checkedAt: number; fresh: boolean };
 };
 
 function find<T extends HTMLElement>(id: string): T {
@@ -155,9 +157,26 @@ export default function mount() {
       ?.getAttribute("aria-checked") === "true";
   /** Sniper protection: the bundle size, when available and switched on. */
   const bundleLamports = () =>
-    config?.sniperBundles === true && isOn("bundle")
+    config?.sniperBundles === true && config.protectionBudget?.fresh === true && Date.now() - config.protectionBudget.checkedAt <= PROTECTION_BUDGET_MAX_AGE && isOn("bundle") && !bundleInput.disabled
       ? Math.round(BUNDLE_STOPS_SOL[Number(bundleInput.value)]! * 1e9)
       : null;
+  function applyProtectionBudget() {
+    const panel = find<HTMLElement>("sniper-protection");
+    panel.hidden = config?.sniperBundles !== true;
+    const limit = config?.protectionBudget?.fresh && Date.now() - config.protectionBudget.checkedAt <= PROTECTION_BUDGET_MAX_AGE ? config.protectionBudget.maxLamports : 0;
+    const options = protectionOptions(limit, Number(bundleInput.value));
+    const toggle = panel.querySelector<HTMLButtonElement>("[data-switch]")!;
+    bundleInput.max = String(Math.max(0, options.maxIndex));
+    bundleInput.value = String(options.selectedIndex);
+    bundleInput.disabled = toggle.disabled = !options.available;
+    if (!options.available) { toggle.setAttribute("aria-checked", "false"); panel.classList.add("is-off"); }
+    find<HTMLElement>("bundle-capacity").textContent = options.available
+      ? `Protection available up to ${options.stops.at(-1)} SOL. The budget refreshes as earlier positions sell.`
+      : "Protection funds are replenishing. You can launch without protection.";
+    const ticks = find<HTMLElement>("bundle-ticks");
+    ticks.replaceChildren(...options.stops.map(sol => { const node = document.createElement("span"); node.textContent = String(sol); return node; }));
+    readSliders();
+  }
   /** Reward fund only counts when its panel is on (not with sniper protection). */
   const rewardFund = () => (isOn("fund") && !bundleLamports() ? dev.value.trim() || "0" : "0");
   /** What the launcher sends beyond the base fee: reward fund + sniper-protection fee. */
@@ -204,7 +223,7 @@ export default function mount() {
   };
   /** Slider readouts; the two range handles never cross. */
   function readSliders() {
-    const lastBundle = BUNDLE_STOPS_SOL.length - 1;
+    const lastBundle = Math.max(1, Number(bundleInput.max));
     const stop = Number(bundleInput.value);
     fill(bundleInput, 0, (stop / lastBundle) * 100);
     const size = `${BUNDLE_STOPS_SOL[stop]} SOL`;
@@ -1004,6 +1023,12 @@ export default function mount() {
 
     setBusy(true);
     try {
+      const selectedProtection = bundleLamports();
+      config = await getJson<Config>("/api/launch-config");
+      applyProtectionBudget();
+      sync();
+      if (!config.launchEnabled) throw new Error("Launch connection is recovering. Please retry shortly.");
+      if (selectedProtection !== bundleLamports()) throw new Error("Protection availability changed. Review the updated amount, then continue.");
       // Prepare a funding address without connecting or signing in a wallet.
       const uploaded = await uploadImage<UploadResult>("/api/media", file!);
       if (!uploaded.image)
@@ -1115,14 +1140,10 @@ export default function mount() {
     config =
       configResult.status === "fulfilled"
         ? configResult.value
-        : {
-            launchEnabled: false,
-            baseFeeLamports: null,
-            message: "Launch status unavailable.",
-          };
-    generateButton.hidden = !config.imageGeneration;
+        : null;
+    generateButton.hidden = !config?.imageGeneration;
     // Without sniper-protection capital the panel is hidden and off.
-    find<HTMLElement>("sniper-protection").hidden = config.sniperBundles !== true;
+    applyProtectionBudget();
     mountBuilder();
     checking = false;
     // The upstream catalogue can be unavailable without disabling burn or
@@ -1154,36 +1175,42 @@ export default function mount() {
   });
   showFeesPanel();
 
-  async function refreshReadiness() {
+  async function refreshReadiness(quiet = false) {
     if (destroyed || checking || busy || prepared) return;
     checking = true;
-    updateAvailability();
+    if (!quiet) updateAvailability();
     try {
       const latest = await getJson<Config>("/api/launch-config");
       if (destroyed) return;
       config = latest;
       freeConfig = Promise.resolve(latest);
-      if (latest.launchEnabled) clearError();
+      if (latest.launchEnabled && !quiet) clearError();
     } catch {
-      if (!destroyed) config = { launchEnabled: false, baseFeeLamports: config?.baseFeeLamports ?? null, message: "" };
+      // A transport failure is unknown, not proof the service is disabled.
+      // Keep the last observation; submission always rechecks server readiness.
     } finally {
-      if (!destroyed) { checking = false; updateAvailability(); }
+      if (!destroyed) { checking = false; applyProtectionBudget(); sync(); }
     }
   }
   const onReturn = () => { if (!document.hidden) void refreshReadiness(); };
-  recheck.addEventListener("click", refreshReadiness);
+  const onRecheck = () => { void refreshReadiness(); };
+  recheck.addEventListener("click", onRecheck);
+  const budgetTimer = setInterval(() => {
+    if (!document.hidden && !launchHandle) void refreshReadiness(true);
+  }, 10_000);
   window.addEventListener("focus", onReturn);
   document.addEventListener("visibilitychange", onReturn);
   sync();
   void initialise().catch(() => {
     if (destroyed) return;
     checking = false;
-    config = { launchEnabled: false, baseFeeLamports: null, message: "" };
+    config = null;
     updateAvailability();
   });
   return () => {
     destroyed = true;
-    recheck.removeEventListener("click", refreshReadiness);
+    recheck.removeEventListener("click", onRecheck);
+    clearInterval(budgetTimer);
     window.removeEventListener("focus", onReturn);
     document.removeEventListener("visibilitychange", onReturn);
     miner?.stop();

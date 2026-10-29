@@ -199,12 +199,13 @@ export default function LaunchPage() {
                 <span className="label" id="t-bundle">Sniper protection</span>
                 <button className="switch" type="button" role="switch" aria-checked="true" aria-labelledby="t-bundle" data-switch=""></button>
               </div>
+              <p className="protection-budget" id="bundle-capacity" role="status">Checking available protection…</p>
               <div className="toggle-panel__body">
                 <div className="readout"><b data-bundle-out="">0.5 SOL</b><span>bought at launch</span></div>
                 <div className="slider" style={{ "--lo": "0%", "--hi": "33%" }}>
                   <input type="range" min="0" max={String(BUNDLE_STOPS_SOL.length - 1)} step="1" value={String(BUNDLE_STOPS_SOL.indexOf((BUNDLE_DEFAULT_LAMPORTS / 1e9) as never))} data-bundle="" id="f-bundle" aria-label="Sniper protection size in SOL" />
                 </div>
-                <div className="ticks"><span>0.1</span><span>0.5</span><span>1</span><span>2</span><span>5 SOL</span></div>
+                <div className="ticks" id="bundle-ticks">{BUNDLE_STOPS_SOL.map(sol => <span>{String(sol)}</span>)}</div>
                 <div className="field">
                   <span className="label label--sm" id="l-exit">Sells when each wallet gets back</span>
                   <div className="chips" role="group" aria-labelledby="l-exit">
@@ -224,9 +225,9 @@ export default function LaunchPage() {
                 </div>
                 <ol className="bundle-how" id="bundle-how" aria-label="How sniper protection works">
                   <li>Your coin is created and <b data-how-size="">0.5 SOL</b> of it is bought in the same Jito bundle, from three new public wallets funded by LaunchSeeds. No sniper can buy before them.</li>
-                  <li>The three wallets sell together once each gets back <b data-how-exit="">110%</b> of its buy (<b data-how-back="">0.55 SOL</b> in all).</li>
+                  <li>The three wallets sell together once each gets back <b data-how-exit="">102%</b> of its buy (<b data-how-back="">0.51 SOL</b> in all).</li>
                   <li data-how-hold="" hidden>If that hasn't happened after <b data-how-limit="">24h</b>, they sell at market.</li>
-                  <li>LaunchSeeds holds at most three coins at once: when a new launch needs the capital, the oldest is sold at market.</li>
+                  <li>LaunchSeeds holds at most three coins at once. Earlier positions release capital when their sell floor is met.</li>
                   <li>You can close it yourself on the coin's page, with the wallet you pay from.</li>
                   <li>You pay only <strong id="bundle-fee">0.015 SOL</strong> (3%). The buy itself is LaunchSeeds's money and returns to LaunchSeeds.</li>
                 </ol>

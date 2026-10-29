@@ -15,6 +15,8 @@ import {
   type LaunchInput,
 } from "../shared/domain";
 export interface LaunchProvider {
+  /** Read-only worker-produced ceiling, checked before exposing payment details. */
+  checkProtectionBudget?(lamports: number | null | undefined): void;
   /** Balance hints only; deposit history remains authoritative for funding. */
   fundedWallets?(wallets: string[]): Promise<Set<string>>;
   /** Generates and stores the token's mint keypair; the CA stays private until deployed. */
@@ -129,6 +131,7 @@ export class LaunchService {
     const existingId = this.existing(accessHash, requestHash);
     let tokenId = existingId;
     if (tokenId === null) {
+      this.provider.checkProtectionBudget?.(settings.bundleLamports);
       // A lost race leaves only an unused, unfunded mint key behind.
       const mint = this.provider.createMint();
       tokenId = this.store.repo.tx((tx) => {
@@ -204,6 +207,7 @@ export class LaunchService {
     const input = launchInput.parse(JSON.parse(claimed.inputJson));
     try {
       const devBuyLamports = solToLamports(input.devBuySol);
+      this.provider.checkProtectionBudget?.(storedLaunchSettings(claimed.launchSettingsJson).bundleLamports);
       const prepared = await this.provider.prepare({
         tokenId,
         ...input,
@@ -216,6 +220,7 @@ export class LaunchService {
         throw new Error("Invalid launch preparation");
       // The launcher pays the sniper-protection fee (3% of the bundle) on top.
       const requiredLamports = prepared.requiredLamports + bundleFeeLamports(storedLaunchSettings(claimed.launchSettingsJson).bundleLamports);
+      this.provider.checkProtectionBudget?.(storedLaunchSettings(claimed.launchSettingsJson).bundleLamports);
       return this.store.repo.tx((tx) => {
         const t = tx.tokens.get(tokenId);
         if (!t || t.leaseId !== leaseId || t.status !== "preparing") return false;
@@ -302,6 +307,7 @@ export class LaunchService {
           throw new ApiError("A payment has been detected. Token details are now locked.", 409);
       };
       await verifyUnfunded();
+      this.provider.checkProtectionBudget?.(settings.bundleLamports);
       const devBuyLamports = solToLamports(input.devBuySol);
       const prepared = await this.provider.prepare({
         tokenId, ...input, devBuyLamports, refreshMetadata: true,
@@ -314,6 +320,7 @@ export class LaunchService {
           !prepared.metadataUri)
         throw new ApiError("Revised launch quote changed wallet identity or lacks metadata", 503);
       await verifyUnfunded();
+      this.provider.checkProtectionBudget?.(settings.bundleLamports);
       const { config, configKey, configJson } = canonicalStrategy(firstStrategy);
       this.store.repo.tx((tx) => {
         const current = tx.tokens.get(tokenId);

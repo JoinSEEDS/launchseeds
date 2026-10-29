@@ -1029,6 +1029,7 @@ body:has(main[data-launch]) .topbar__launch{display:none}
 .toggle-panel.is-off .panel__head { border-bottom-color: transparent; }
 .toggle-panel.is-off .toggle-panel__body { display: none; }
 .toggle-panel__body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.protection-budget { margin: 0; padding: 10px 20px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .toggle-panel__body--2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 28px; }
 .switch {
   position: relative; flex: none; width: 44px; height: 28px; padding: 0; background: transparent; border: 0; cursor: pointer;

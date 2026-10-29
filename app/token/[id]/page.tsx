@@ -98,7 +98,7 @@ export default function TokenPage({
   const sniperCoin = market.holderRewards;
   const bundleStatus: Record<string, string> = {
     buying: "Launching", holding: "Holding", exiting: "Selling", exited: "Sold, sweeping to the fund",
-    closed: "Sold; profit held in the fund", settling: "Paying out profit", settled: "Settled", abandoned: "Not launched",
+    closed: "Sold; profit held in the fund", settling: "Paying out profit", settled: bundle?.reward && bundle.reward.status !== "sent" && bundle.reward.status !== "skipped" ? "Buying back for $TOKEN" : "Settled", abandoned: "Not launched",
   };
   const sol = (lamports: string | bigint) => `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
   const units = (raw: string) => (Number(raw) / 10 ** market.tokenDecimals).toLocaleString("en-US", { maximumFractionDigits: 0 });
@@ -447,9 +447,9 @@ export default function TokenPage({
                   once each gets back {bundle.exitTargetPercent}% of its buy{bundle.external
                     ? <>. The profit of that sale buys this coin back slowly, and everything bought back is burned.</>
                     : <>{bundle.holdUntil ? <>, or at market at {new Date(bundle.holdUntil).toUTCString().slice(5, 22)} UTC if that hasn't happened</> : null}.
-                      They also sell at market if the fund needs the capital for a new launch, or if the launcher
-                      closes it. Profit stays in the fund until the coin is liquidated, then goes to the fund owner
-                      or to this coin's holders by Gravity.</>}
+                      The launcher can also close it at market. The profit of the sale buys this coin back in
+                      hourly steps, and everything bought back goes to one <a href="/token#launch-rewards">$TOKEN holder</a>,
+                      drawn by Gravity.</>}
                 </p>
                 <div className="table-wrap">
                   <table className="table">
@@ -497,7 +497,31 @@ export default function TokenPage({
                   {bundle.settlement ? (
                     <>
                       <dt>Profit goes to</dt>
-                      <dd>{bundle.settlement === "owner" ? "The fund owner" : "Holders, by Gravity"}</dd>
+                      <dd>{{ owner: "The fund owner", holders: "Holders, by Gravity", token: "A $TOKEN holder, by Gravity" }[bundle.settlement]}</dd>
+                    </>
+                  ) : null}
+                  {bundle.reward && bundle.reward.status !== "skipped" ? (
+                    <>
+                      <dt>Buyback</dt>
+                      <dd data-num="">
+                        {bundle.reward.buys.filter((b) => b.confirmed).length} of {bundle.reward.steps} hourly buys ·{" "}
+                        {sol(bundle.reward.spentLamports)} of {sol(bundle.reward.profitLamports)}
+                      </dd>
+                      {bundle.reward.winner ? (
+                        <>
+                          <dt>Winner</dt>
+                          <dd>
+                            <a className="mono" href={`https://solscan.io/account/${bundle.reward.winner}`} target="_blank" rel="noopener noreferrer">{shortAddress(bundle.reward.winner)}</a>
+                            {bundle.reward.tokensRaw ? ` · ${units(bundle.reward.tokensRaw)} $${token.symbol}` : ""}
+                            {bundle.reward.transferSignature ? <> · <a href={`https://solscan.io/tx/${bundle.reward.transferSignature}`} target="_blank" rel="noopener noreferrer">Tx</a></> : null}
+                          </dd>
+                        </>
+                      ) : null}
+                    </>
+                  ) : bundle.reward?.note ? (
+                    <>
+                      <dt>Buyback</dt>
+                      <dd>{bundle.reward.note}</dd>
                     </>
                   ) : null}
                   {bundle.buyback ? (

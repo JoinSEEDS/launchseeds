@@ -1,3 +1,4 @@
+import { isTokenToken } from "./token-holders";
 import { lastKnownSolUsd } from "./sol-price";
 import { createLaunchseedsCoreServices } from "../services";
 import { humanToRaw } from "../domain/holders";
@@ -75,10 +76,11 @@ export class Store {
     if (!token) throw new Error("Not found");
     return this.view(token);
   }
+  /** LaunchSeeds's launches ($TOKEN itself is tracked, not listed). */
   listLive() {
     return this.repo.tokens
       .all()
-      .filter((x) => x.status === "live")
+      .filter((x) => x.status === "live" && !isTokenToken(x))
       .map((x) => this.view(x));
   }
   listWork() {

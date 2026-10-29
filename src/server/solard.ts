@@ -14,6 +14,9 @@ import { lastKnownSolUsd, rememberSolUsd } from "./sol-price";
 import { holderRewardLaunchInstructions, marketMakerWalletName } from "./holder-reward-launch";
 import { BundleEngine } from "./bundle-engine";
 import { createBundleChain } from "./bundle-chain-solard";
+import { BundleRewardEngine } from "./bundle-reward";
+import { createRewardChain } from "./bundle-reward-solard";
+import { assertProtectionBudget, refreshProtectionBudget } from "./protection-budget";
 import { executeBundle, refreshBundle, type BundleContext, type BundleTrader } from "./launch-bundle-solard";
 import { launchBundlesEnabled, parseBundleIntent } from "./launch-bundle";
 const { measure } = createMeasure("launchseeds:solard");
@@ -49,6 +52,9 @@ async function fetchSolUsd(): Promise<number> {
   }
   throw new Error(`SOL/USD price is unavailable (${failures.join("; ")})`);
 }
+import { rpcUrlList } from "./rpc-urls";
+export { rpcUrlList } from "./rpc-urls";
+
 export class SolardSource {
   constructor(readonly sdk: SolardClient) {}
   static async create(rpcUrl: string) {
@@ -56,13 +62,13 @@ export class SolardSource {
     return new SolardSource(
       sdk.createSolard({
         rpcUrl,
-        rpcUrls: [rpcUrl],
+        rpcUrls: rpcUrlList(rpcUrl),
         dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite",
       }),
     );
   }
   static async createTrader(rpcUrl: string) {
-    const sdk = (await loadSolard()).createTraderSolard({ rpcUrl, rpcUrls: [rpcUrl], dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite" });
+    const sdk = (await loadSolard()).createTraderSolard({ rpcUrl, rpcUrls: rpcUrlList(rpcUrl), dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite" });
     if (typeof sdk.signer !== "function" || !sdk.claims?.creatorFees || typeof sdk.buy !== "function") throw new Error("Solard trading capabilities unavailable");
     return new SolardSource(sdk as unknown as SolardClient);
   }
@@ -178,7 +184,7 @@ export class SolardLaunchProvider implements LaunchProvider {
     const provider = new SolardLaunchProvider(
       sdk.createTraderSolard({
         rpcUrl,
-        rpcUrls: [rpcUrl],
+        rpcUrls: rpcUrlList(rpcUrl),
         dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite",
       }),
       store,
@@ -190,13 +196,19 @@ export class SolardLaunchProvider implements LaunchProvider {
     provider.vanityPool = (await import(name)) as VanityPool;
     if (launchBundlesEnabled()) {
       // Same wallet store, v1 transactions (bundle packets exceed the legacy limit).
-      const v1 = sdk.createTraderSolard({ rpcUrl, rpcUrls: [rpcUrl], dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite", transactionVersion: 1 } as never);
+      const v1 = sdk.createTraderSolard({ rpcUrl, rpcUrls: rpcUrlList(rpcUrl), dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite", transactionVersion: 1 } as never);
       provider.bundleContext = { connection: provider.connection, rpcUrl, trader: v1 as unknown as BundleTrader, wallet: (name) => provider.walletFor(name) };
       const capital = provider.walletFor(process.env.LAUNCHSEEDS_BUNDLE_CAPITAL_WALLET || "launchseeds-bundle-capital").address;
-      provider.bundles = new BundleEngine(store.repo, createBundleChain(provider.bundleContext, {
+      const chain = createBundleChain(provider.bundleContext, {
         capitalWallet: capital,
         ownerWallet: process.env.LAUNCHSEEDS_FUND_OWNER_WALLET?.trim() || null,
-      }));
+      });
+      provider.bundles = new BundleEngine(store.repo, chain);
+      // Profitable sales buy their coin back for a $TOKEN holder.
+      const tokenMint = process.env.LAUNCHSEEDS_TOKEN_MINT?.trim();
+      if (tokenMint) provider.bundles.rewards = new BundleRewardEngine(store, createRewardChain(provider.bundleContext, chain, capital), {
+        tokenMint, excluded: [process.env.LAUNCHSEEDS_FUND_OWNER_WALLET?.trim() ?? ""],
+      });
     }
     return provider;
   }
@@ -205,6 +217,12 @@ export class SolardLaunchProvider implements LaunchProvider {
   /** Sniper-protection bundles ([launchseeds] launch_bundles = true). */
   bundles: BundleEngine | null = null;
   bundleContext: BundleContext | null = null;
+  checkProtectionBudget(lamports: number | null | undefined) {
+    assertProtectionBudget(this.store, lamports);
+  }
+  async refreshProtectionBudget() {
+    if (this.bundles) await refreshProtectionBudget(this.store, this.connection, this.bundles.chain.capitalWallet);
+  }
   walletFor(name: string) {
     return this.findOrCreateWallet(name);
   }

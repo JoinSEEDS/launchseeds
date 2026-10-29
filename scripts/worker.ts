@@ -38,7 +38,19 @@ if (!rpcUrl) throw new Error("SOLANA_RPC_URL is required");
 const live = process.env.LAUNCHSEEDS_LIVE_OPERATIONS === "true";
 mkdirSync("./data", { recursive: true });
 const lockPath = "./data/launchseeds-worker.lock";
-const lock = acquireLock(lockPath);
+const lock = await acquireLockWhenFree(lockPath);
+/** A restart can start this worker before the old one has exited: wait up to
+ * 2 minutes (it finishes its cycle first) instead of leaving no worker at all. */
+async function acquireLockWhenFree(path: string, waitMs = 120_000) {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    try { return acquireLock(path); }
+    catch (error) {
+      if (!(error instanceof Error && error.message.startsWith("Another LaunchSeeds worker")) || Date.now() >= until) throw error;
+      await Bun.sleep(1_000);
+    }
+  }
+}
 /** Single-worker lock holding the owner PID. A lock left by a force-killed
  * worker (bgrun restart on Windows skips the finally block) is taken over. */
 function acquireLock(path: string) {
@@ -76,6 +88,7 @@ let source: SolardSource | undefined;
 let rewardsSource: SolardSource | undefined;
 let launchProvider: SolardLaunchProvider | undefined;
 let fastLaunch: ReturnType<typeof startLaunchLoop> | undefined;
+let budgetRefresh: Promise<void> | undefined;
 let closeLaunchWake: (()=>void) | undefined;
 try {
   source = await SolardSource.create(rpcUrl);
@@ -146,8 +159,21 @@ try {
   };
   if (!once && launch) {
     const service = launch;
+    let lastBudgetRefresh = 0;
+    const refreshBudget = () => {
+      if (!launchProvider?.bundles || budgetRefresh || Date.now() - lastBudgetRefresh < 5_000) return;
+      lastBudgetRefresh = Date.now();
+      budgetRefresh = launchProvider.refreshProtectionBudget().catch(() => {
+        console.warn("Protection budget refresh unavailable; normal launches remain available");
+      }).finally(() => { budgetRefresh = undefined; });
+    };
+    refreshBudget();
     fastLaunch = startLaunchLoop({
-      cycle: () => runLaunchCycle({store,launch:service,bundles:launchProvider?.bundles??undefined}),
+      cycle: async () => {
+        const result = await runLaunchCycle({store,launch:service,bundles:launchProvider?.bundles??undefined});
+        refreshBudget();
+        return result;
+      },
       onStart: () => { health.startCycle(workerId); },
       onFinish: result => {
         health.finishCycle(workerId,result.errors.length===0,result.errors.map(e=>e.operation).join(","));
@@ -200,6 +226,7 @@ try {
 } finally {
   closeLaunchWake?.();
   await fastLaunch?.stop();
+  await budgetRefresh;
   clearInterval(heartbeat);
   health.stop(workerId);
   await listener?.close();

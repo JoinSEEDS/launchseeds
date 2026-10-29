@@ -11,6 +11,7 @@ import type { MarketMaker } from "./market-maker";
 import type { BundleEngine } from "./bundle-engine";
 import { marketMakerWalletName } from "./holder-reward-launch";
 import { storedLaunchSettings } from "../domain/launch-settings";
+import { ensureTokenToken, tokenMint, isTokenToken } from "./token-holders";
 
 const { measure } = createMeasure("launchseeds:worker");
 
@@ -49,6 +50,10 @@ export async function runCycle(input: {
         });
       }
     };
+    // $TOKEN holders earn Gravity for sniper-protection rewards. Pump coins
+    // (as $TOKEN is) have 6 decimals.
+    const token = tokenMint();
+    if (input.services && token) ensureTokenToken(input.store.repo, { mint: token, decimals: 6 });
     for (const token of input.store.listWork()) {
       if (token.status === "preparing") {
         // Never resume a fundable launch without its immutable first strategy.
@@ -71,6 +76,8 @@ export async function runCycle(input: {
           await input.services!.holders.syncSnapshot(token.id);
           await input.services!.gravity.accrueMinute(token.id);
         });
+      // $TOKEN is tracked for its holders' Gravity only.
+      if (isTokenToken(token)) continue;
       await attempt(token.id, "strategy takeover", async () => {
         input.services?.governance.refreshLeader(token.id);
       });

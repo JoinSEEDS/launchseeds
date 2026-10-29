@@ -136,3 +136,4 @@ In production, run the same `bun run start` behind Caddy; keep it bound to
 127.0.0.1 so Caddy is the only way in.
 
 Automatic bundle exits use a pre-signed fixed-minimum sale (102% of each wallet's buy budget, before network fees), persisted at fill confirmation and checked on the fast launch loop. Unsent candidates renew before blockhash expiry. Automatic capital rotation respects this floor; explicit operator liquidation is separate.
+Protection sizing is capped before payment using a worker-produced liquid-budget snapshot. Unsold positions and earmarked reward funds are excluded. The form offers smaller sizes or a launch without protection; the backend independently checks the ceiling before exposing payment details. This is a per-launch ceiling, not a reservation or a promise that rotating capital is immediately available. Existing funded requests remain unchanged.

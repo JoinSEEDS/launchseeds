@@ -16,6 +16,7 @@ import {
 import { RequestCache } from "../../lib/request-cache";
 import { trustedIngressActive } from "../../lib/trusted-client";
 import { rpcFetch } from "./rpc-pacing";
+import { rpcUrlList } from "./rpc-urls";
 
 export interface WorkerHeartbeat {
   workerId: string;
@@ -174,6 +175,23 @@ export async function probeFinalizedRpc(
   );
 }
 
+/** A primary endpoint's cooldown must not disable launches while a configured
+ * backup can prove finalized chain access. Each probe is bounded and coalesced. */
+export async function probeConfiguredRpc(
+  urls: string[], now = Date.now(),
+  probe: (url: string, now: number) => Promise<RpcProbe> = probeFinalizedRpc,
+): Promise<RpcProbe> {
+  try {
+    return await Promise.any([...new Set(urls)].map(async url => {
+      const result = await probe(url, now);
+      if (!result.healthy) throw new Error("RPC probe failed");
+      return result;
+    }));
+  } catch {
+    return { healthy: false, checkedAt: Date.now(), slot: 0 };
+  }
+}
+
 export async function getOperationalLaunchReadiness(
   now = Date.now(),
 ): Promise<OperationalReadiness> {
@@ -194,7 +212,7 @@ export async function getOperationalLaunchReadiness(
   } catch {
     /* fail closed */
   }
-  const rpc = await probeFinalizedRpc(rpcUrl, now);
+  const rpc = await probeConfiguredRpc(rpcUrlList(rpcUrl), now);
   const assessed = assessLaunchReadiness({
     now: now + (Date.now() - startedAt),
     flags: {

@@ -22,6 +22,8 @@ import { drawRepo } from "./draws";
 import { stockWinRepo } from "./stock-wins";
 import { marketMakerRepo } from "./market-maker";
 import { launchBundlesRepo } from "./launch-bundles";
+import { bundleRewardsRepo } from "./bundle-rewards";
+import { siteVotesRepo } from "./site-votes";
 import { readRepo } from "./reads";
 
 export function createRepo(db: LaunchseedsDatabase) {
@@ -45,6 +47,8 @@ export function createRepo(db: LaunchseedsDatabase) {
     stockWins: stockWinRepo(db),
     marketMaker: marketMakerRepo(db),
     launchBundles: launchBundlesRepo(db),
+    bundleRewards: bundleRewardsRepo(db),
+    siteVotes: siteVotesRepo(db),
   };
   return {
     ...r,

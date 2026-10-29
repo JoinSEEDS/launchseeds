@@ -424,7 +424,8 @@ export const schemas = {
     /** What the fund sent to the bundle wallets (buys + reserves): its principal. */
     costLamports: Atomic.default("0"),
     /** Chosen by the owner at liquidation: where this coin's realized profit goes. */
-    settlement: z.enum(["owner", "holders"]).nullable().default(null),
+    /** token: the profit bought the coin back for a $TOKEN holder (bundleRewards). */
+    settlement: z.enum(["owner", "holders", "token"]).nullable().default(null),
     profitLamports: z.string().regex(/^-?\d+$/).nullable().default(null),
     settledAt: Time.nullable().default(null),
     /** Run by the launch CLI on another wallet store: shown here, never traded here. */
@@ -461,6 +462,54 @@ export const schemas = {
     lastValidBlockHeight: Time,
     outcome: z.literal("expired_unobserved"),
     reconciledAt: Time,
+  }),
+  /** A sold bundle's profit, spent buying the coin back in steps from the
+   * capital wallet; everything bought goes to one $TOKEN holder, drawn with a
+   * chance proportional to Gravity (snapshot committed before the blockhash). */
+  bundleRewards: z.object({
+    tokenId: RowId,
+    status: z.enum(["buying", "committed", "drawn", "sending", "sent", "skipped", "needs_review"]),
+    profitLamports: Atomic,
+    steps: z.number().int().min(1),
+    stepMs: Time,
+    startedAt: Time,
+    /** [{ step, lamports, signature, transaction, lastValidBlockHeight, confirmed, tokensAfterRaw, at }] */
+    buysJson: z.string().default("[]"),
+    /** What the winner receives (the capital wallet's balance of the coin). */
+    tokensRaw: Atomic.nullable().default(null),
+    /** Frozen $TOKEN Gravity entries [{ wallet, weight }] and their hash. */
+    snapshotJson: z.string().nullable().default(null),
+    snapshotHash: z.string().nullable().default(null),
+    committedAt: Time.nullable().default(null),
+    winner: z.string().nullable().default(null),
+    chance: z.number().nullable().default(null),
+    randomnessRef: z.string().nullable().default(null),
+    transferTransaction: z.string().nullable().default(null),
+    transferSignature: z.string().nullable().default(null),
+    transferLastValidBlockHeight: z.number().int().nullable().default(null),
+    sentAt: Time.nullable().default(null),
+    error: z.string().nullable().default(null),
+    createdAt: Time,
+  }),
+  /** Holder votes that steer a token website (e.g. $COIN's steer, -10..10
+   * tenths): one current choice per wallet, weighted by its Gravity when counted. */
+  siteVotes: z.object({
+    site: Id,
+    wallet: Id,
+    choice: Id,
+    message: z.string(),
+    signature: Id,
+    votedAt: Time,
+  }),
+  /** A token website's holder chat, the neuron's replies and the #1 holder's
+   * thought. Holder text is plain text, at most 140 characters. */
+  siteMessages: z.object({
+    site: Id,
+    kind: z.enum(["chat", "reply", "thought"]),
+    /** null for the neuron's replies. */
+    wallet: z.string().nullable().default(null),
+    text: z.string().max(400),
+    at: Time,
   }),
   /** Profit payouts at a bundle's settlement, one row per transaction batch
    * (signed bytes persisted before sending; resent while valid). */
@@ -506,6 +555,9 @@ export type StockWin = Tables["stockWins"];
 export type MmTrade = Tables["mmTrades"];
 export type LaunchBundle = Tables["launchBundles"];
 export type BundlePayout = Tables["bundlePayouts"];
+export type BundleReward = Tables["bundleRewards"];
+export type SiteVote = Tables["siteVotes"];
+export type SiteMessage = Tables["siteMessages"];
 export type StrategyConfigValue = z.infer<typeof StrategyConfig>;
 export type LaunchStatusValue = z.infer<typeof LaunchStatus>;
 export type ExecutionStatusValue = z.infer<typeof ExecutionStatus>;
