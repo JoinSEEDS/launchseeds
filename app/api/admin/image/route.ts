@@ -26,28 +26,45 @@ export async function POST(request: Request): Promise<Response> {
   try {
     // Browser sessions use the usual same-origin admin action checks.
     if (!hasAdminApiKey(request)) enforceAdminAction(request);
-    if (!limiter.check(request).allowed) throw new AdminHttpError("Image limit reached. Try again later.", 429);
+    if (!limiter.check(request).allowed)
+      throw new AdminHttpError("Image limit reached. Try again later.", 429);
     const body = await readBoundedJson<Record<string, unknown>>(request, 8192);
     const text = (value: unknown, max: number) =>
-      typeof value === "string" ? value.normalize("NFKC").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max) : "";
+      typeof value === "string"
+        ? value
+            .normalize("NFKC")
+            .replace(/[\u0000-\u001f\u007f]/g, " ")
+            .trim()
+            .slice(0, max)
+        : "";
     const name = text(body.name, 64);
     const prompt = text(body.prompt, 4000);
-    if (!name && !prompt) throw new AdminHttpError("Send a name or a prompt.", 400);
+    if (!name && !prompt)
+      throw new AdminHttpError("Send a name or a prompt.", 400);
     let image: Buffer;
     try {
-      image = await generateTokenImage(name || "artwork", text(body.symbol, 16).toUpperCase(), request.signal, {
-        prompt: prompt || undefined,
-        styleReference: body.styleReference !== false,
-      });
+      image = await generateTokenImage(
+        name || "artwork",
+        text(body.symbol, 16).toUpperCase(),
+        request.signal,
+        {
+          prompt: prompt || undefined,
+          styleReference: body.styleReference !== false,
+        },
+      );
     } catch (error) {
-      console.error("Admin image generation failed", error instanceof Error ? error.message : error);
+      console.error(
+        "Admin image generation failed",
+        error instanceof Error ? error.message : error,
+      );
       throw new AdminHttpError("Image generation failed. Try again.", 502);
     }
     return new Response(new Uint8Array(image), {
       headers: { "content-type": "image/png", "cache-control": "no-store" },
     });
   } catch (error) {
-    if (error instanceof ApiError) return adminError(new AdminHttpError(error.message, error.status));
+    if (error instanceof ApiError)
+      return adminError(new AdminHttpError(error.message, error.status));
     return adminError(error);
   }
 }

@@ -142,9 +142,14 @@ export async function patchJson<T>(
   return withAbort(async (signal) => {
     const headers = new Headers(options.headers);
     headers.set("content-type", "application/json");
-    return parseJsonResponse<T>(await fetch(url, {
-      method: "PATCH", headers, body: JSON.stringify(value), signal,
-    }));
+    return parseJsonResponse<T>(
+      await fetch(url, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify(value),
+        signal,
+      }),
+    );
   }, options);
 }
 

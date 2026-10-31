@@ -1,4 +1,7 @@
-import { MAX_TOKEN_IMAGE_BYTES, TOKEN_IMAGE_SIZE_ERROR } from "../../../lib/media-policy";
+import {
+  MAX_TOKEN_IMAGE_BYTES,
+  TOKEN_IMAGE_SIZE_ERROR,
+} from "../../../lib/media-policy";
 import { requireSameOrigin, ApiError } from "../../../lib/api-security";
 import { IngressRateLimiter } from "../../../lib/trusted-client";
 import { createHash } from "node:crypto";

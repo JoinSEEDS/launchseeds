@@ -9,7 +9,10 @@ export function GET(request: Request): Response {
     const store = getStore();
     const tokenId = store.liveTokenId(extractPathMint(request, "/api/tokens"));
     // The raffle ledger leaves out LaunchSeeds's own wallets (treasury, bundle).
-    return apiJson({ ...store.publicToken(tokenId), raffle: raffleLeaderboard(store, tokenId) });
+    return apiJson({
+      ...store.publicToken(tokenId),
+      raffle: raffleLeaderboard(store, tokenId),
+    });
   } catch (error) {
     return publicRouteError(error);
   }

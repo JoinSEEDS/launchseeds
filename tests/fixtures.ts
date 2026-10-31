@@ -7,7 +7,9 @@ const hex = (bytes: number) =>
     b.toString(16).padStart(2, "0"),
   ).join("");
 /** A token insert payload (no id); insert it with `store.repo.tokens.insert`. */
-export function tokenFixture(patch: Partial<NewRows["tokens"]> = {}): NewRows["tokens"] {
+export function tokenFixture(
+  patch: Partial<NewRows["tokens"]> = {},
+): NewRows["tokens"] {
   return schemas.tokens.parse({
     handle: hex(16),
     mint: null,
@@ -44,7 +46,10 @@ export function tokenFixture(patch: Partial<NewRows["tokens"]> = {}): NewRows["t
   });
 }
 /** Inserts a fixture token and returns the stored row (with its id). */
-export function insertToken(store: Store, patch: Partial<NewRows["tokens"]> = {}): Token {
+export function insertToken(
+  store: Store,
+  patch: Partial<NewRows["tokens"]> = {},
+): Token {
   const id = store.repo.tokens.insert(tokenFixture(patch));
   return store.repo.tokens.get(id)!;
 }

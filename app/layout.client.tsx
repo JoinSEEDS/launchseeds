@@ -14,16 +14,26 @@ function closeDialogsOnBackdrop(): () => void {
   let pressed: HTMLDialogElement | null = null;
   const outside = (dialog: HTMLDialogElement, event: MouseEvent) => {
     const r = dialog.getBoundingClientRect();
-    return event.clientX < r.left || event.clientX > r.right ||
-      event.clientY < r.top || event.clientY > r.bottom;
+    return (
+      event.clientX < r.left ||
+      event.clientX > r.right ||
+      event.clientY < r.top ||
+      event.clientY > r.bottom
+    );
   };
   const down = (event: PointerEvent) => {
     const target = event.target;
-    pressed = target instanceof HTMLDialogElement && target.open && outside(target, event) ? target : null;
+    pressed =
+      target instanceof HTMLDialogElement &&
+      target.open &&
+      outside(target, event)
+        ? target
+        : null;
   };
   const click = (event: MouseEvent) => {
     const target = event.target;
-    if (pressed && target === pressed && outside(pressed, event)) pressed.close("cancel");
+    if (pressed && target === pressed && outside(pressed, event))
+      pressed.close("cancel");
     pressed = null;
   };
   document.addEventListener("pointerdown", down);
@@ -39,11 +49,9 @@ export default function mount() {
   const releaseDialogs = closeDialogsOnBackdrop();
   const stopNumbers = watchLiveNumbers();
   const button = document.querySelector<HTMLButtonElement>("[data-wallet-btn]");
-  if (!button) return () => { releaseDialogs(); stopNumbers(); };
-
   let busy = false;
   const repaint = (address = walletAddress()) => {
-    if (busy) return;
+    if (!button || busy) return;
     button.textContent = address
       ? `${address.slice(0, 4)}…${address.slice(-4)}`
       : "Connect Wallet";
@@ -54,7 +62,7 @@ export default function mount() {
   repaint();
 
   const connect = async () => {
-    if (busy) return;
+    if (!button || busy) return;
     busy = true;
     button.disabled = true;
     button.textContent = "Connecting…";
@@ -111,12 +119,12 @@ export default function mount() {
       );
     });
   };
-  button.addEventListener("click", connect);
+  button?.addEventListener("click", connect);
   document.addEventListener("click", copies);
   return () => {
     releaseDialogs();
     stopNumbers();
-    button.removeEventListener("click", connect);
+    button?.removeEventListener("click", connect);
     document.removeEventListener("click", copies);
     unsubscribe();
   };

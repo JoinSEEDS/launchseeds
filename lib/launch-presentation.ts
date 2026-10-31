@@ -45,14 +45,13 @@ export function launchAvailability(
     showAction,
     showUnavailable: state.checking || showUnavailable,
     disabled: !enabled || state.busy,
-    message: state.checking || config === null
-      ? "Checking launch availability…"
-      : enabled
-        ? ""
-        : "Launch connection is recovering. Retrying automatically...",
-    buttonLabel: state.busy
-      ? "Preparing payment…"
-      : "Continue to Payment",
+    message:
+      state.checking || config === null
+        ? "Checking launch availability…"
+        : enabled
+          ? ""
+          : "Launch connection is recovering. Retrying automatically...",
+    buttonLabel: state.busy ? "Preparing payment…" : "Continue to Payment",
     fee: fixedFeeText(fee),
     total,
   };

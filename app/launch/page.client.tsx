@@ -1,28 +1,21 @@
+import { normalizeX, telegramLink, xLink } from "../../lib/launch-socials";
+import { allocateUserBatches } from "../../src/domain/user-funded-batches";
+import { mountLaunchColumns } from "../../lib/launch-columns";
+import { mountLaunchCountdown } from "../../lib/launch-countdown";
+import { allocatedBudget } from "../../src/domain/protection-allocation";
 import { render } from "tradjs/client";
-import { protectionOptions, PROTECTION_BUDGET_MAX_AGE } from "../../lib/protection-options";
+import {
+  protectionOptions,
+  PROTECTION_BUDGET_MAX_AGE,
+} from "../../lib/protection-options";
 import {
   parseLaunchSettings,
-  feeSplit,
-  durationText,
-  sniperDescription,
-  secondsText,
-  compactUsd,
-  rangeText,
-  liquidityShare,
-  SNIPER_SECONDS,
-  MARKET_CAP_STOPS,
-  MAX_LIQUIDITY_SHARE,
-  LIQUIDITY_AVAILABLE,
   BUNDLE_STOPS_SOL,
   BUNDLE_DEFAULT_EXIT_PERCENT,
   bundleFeeLamports,
   type LaunchSettings,
 } from "../../src/domain/launch-settings";
-import { createStrategyBuilder } from "../components/strategy-builder";
-import { strategySummary } from "../../lib/strategy-presenter";
 import { launchAvailability } from "../../lib/launch-presentation";
-import type { Catalog } from "../../lib/catalog";
-import type { Strategy } from "../../lib/strategy";
 import {
   getJson,
   postJson,
@@ -33,7 +26,11 @@ import {
 } from "../../lib/client-request";
 import { connectWallet, walletAddress } from "../../lib/wallet-session";
 import { sendWalletTransaction } from "../../lib/wallet-transaction";
-import { createMiner, type MineFound, type MineProgress } from "../../lib/proof-of-work";
+import {
+  createMiner,
+  type MineFound,
+  type MineProgress,
+} from "../../lib/proof-of-work";
 import {
   buildLaunchPayload,
   launchUrl,
@@ -54,6 +51,7 @@ type Config = {
   imageGeneration?: boolean;
   /** Sniper protection (LaunchSeeds-funded launch bundle) is available. */
   sniperBundles?: boolean;
+  userFundedBatches?: boolean;
   protectionBudget?: { maxLamports: number; checkedAt: number; fresh: boolean };
 };
 
@@ -72,7 +70,11 @@ const short = (value: string) =>
   value.length > 12 ? `${value.slice(0, 4)}…${value.slice(-4)}` : value;
 
 /** Solana Pay URI: wallet apps that scan it prefill the address and amount. */
-export function solanaPayUri(address: string, sol: string, symbol: string): string {
+export function solanaPayUri(
+  address: string,
+  sol: string,
+  symbol: string,
+): string {
   const params = new URLSearchParams({
     amount: sol,
     label: "LaunchSeeds",
@@ -90,26 +92,20 @@ export default function mount() {
 
   const name = find<HTMLInputElement>("f-name");
   const ticker = find<HTMLInputElement>("f-ticker");
-  const dev = find<HTMLInputElement>("f-dev");
   const image = find<HTMLInputElement>("f-image");
   const website = find<HTMLInputElement>("f-web");
   const x = find<HTMLInputElement>("f-x");
   const telegram = find<HTMLInputElement>("f-tg");
   const bundleInput = find<HTMLInputElement>("f-bundle");
-  const descriptionInput = find<HTMLInputElement>("f-desc");
-  const descriptionOwn = find<HTMLInputElement>("f-desc-own");
+  const descriptionInput = find<HTMLTextAreaElement>("f-desc");
   const websiteOwn = find<HTMLInputElement>("f-web-own");
-  const feesTo = find<HTMLInputElement>("f-fees-to");
+  const descriptionOwn = find<HTMLInputElement>("f-desc-own");
   const cloneInput = find<HTMLInputElement>("f-clone");
   const cloneButton = find<HTMLButtonElement>("clone-btn");
   const cloneStatus = find<HTMLElement>("clone-status");
   const cloneResult = find<HTMLElement>("clone-result");
   const cloneDialog = find<HTMLDialogElement>("clone-dialog");
   const openClone = find<HTMLButtonElement>("open-clone");
-  const powInput = form.querySelector<HTMLInputElement>("[data-pow]")!;
-  const shareInput = form.querySelector<HTMLInputElement>("[data-share]")!;
-  const lowInput = form.querySelector<HTMLInputElement>("[data-range-lo]")!;
-  const highInput = form.querySelector<HTMLInputElement>("[data-range-hi]")!;
   const editDetails = find<HTMLButtonElement>("edit-launch-details");
   const payButton = find<HTMLButtonElement>("pay-in-wallet");
   const errorBox = find<HTMLElement>("launch-error");
@@ -117,12 +113,43 @@ export default function mount() {
   const recheck = find<HTMLButtonElement>("recheck-launch");
   const submit = find<HTMLButtonElement>("get-deposit");
   const actionWrap = find<HTMLElement>("submit-wrap");
-  const previewRoot = find<HTMLElement>("launch-first-preview");
-  const builderRoot = find<HTMLElement>("first-strategy-root");
   const statusPanel = find<HTMLElement>("launch-status-panel");
   const statusText = find<HTMLElement>("payment-status");
   const retryButton = find<HTMLButtonElement>("retry-launch-status");
   const avatar = find<HTMLElement>("launch-avatar");
+  const scheduledAtInput = find<HTMLInputElement>("f-scheduled-at");
+  const timeMode = find<HTMLSelectElement>("f-time-mode");
+  const launchMinutes = find<HTMLInputElement>("f-launch-minutes");
+  const stopLaunchCountdown = mountLaunchCountdown(document.querySelector("main[data-launch]") ?? document);
+  const timeModeChanged = () => {
+    find<HTMLElement>("launch-minutes-field").hidden = timeMode.value !== "minutes";
+    find<HTMLElement>("launch-date-field").hidden = timeMode.value !== "date";
+  };
+  timeMode.addEventListener("change",timeModeChanged);
+  const profitMode = find<HTMLSelectElement>("f-profit-mode");
+  const feeMode = find<HTMLSelectElement>("f-fee-mode");
+  const feesTo = find<HTMLInputElement>("f-fees-to");
+  const profitWallet = find<HTMLInputElement>("f-profit-wallet");
+  const boostMinutes = find<HTMLInputElement>("f-boost-minutes");
+  const boostSteps = find<HTMLInputElement>("f-boost-steps");
+  const sharesInputs = [0, 1, 2].map((i) =>
+    find<HTMLInputElement>(`f-wallet-share-${i}`),
+  );
+  // User-funded launches: up to four columns, each one bundle transaction.
+  const launchColumns = mountLaunchColumns(find<HTMLElement>("user-batch-controls"), () => sync());
+  const scheduledNow = () => {
+    const minutes = Number(launchMinutes.value);
+    return timeMode.value === "minutes" && Number.isInteger(minutes) && minutes >= 3 && minutes <= 10080 ? Date.now() + minutes * 60_000 : new Date(scheduledAtInput.value).getTime();
+  };
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const localTime = new Date(Date.now() + 30 * 60_000);
+  scheduledAtInput.value = new Date(
+    localTime.getTime() - localTime.getTimezoneOffset() * 60_000,
+  )
+    .toISOString()
+    .slice(0, 16);
+  find<HTMLElement>("schedule-timezone").textContent =
+    `Times are entered in ${timezone}. The public plan records UTC.`;
   const imageUpload = find<HTMLElement>("image-upload");
   const feedback = find<HTMLElement>("funding-copy-feedback");
   const freeButton = find<HTMLButtonElement>("free-launch");
@@ -132,9 +159,6 @@ export default function mount() {
   // Strategy rules are not chosen on the launch form; every launch uses the
   // defaults (24h first-strategy lock, 1h minimum active). Summary shows them.
   const rules = { firstStrategyLockMs: 86_400_000, minimumActiveMs: 3_600_000 };
-  let catalog: Catalog | null = null;
-  let current: Strategy | null = null;
-  let builder: ReturnType<typeof createStrategyBuilder> | null = null;
   let config: Config | null = null;
   let checking = true;
   let prepared: PublicLaunchStatus | null = null;
@@ -155,64 +179,150 @@ export default function mount() {
     form
       .querySelector(`[data-toggle-panel="${panel}"] [data-switch]`)
       ?.getAttribute("aria-checked") === "true";
-  /** Sniper protection: the bundle size, when available and switched on. */
-  const bundleLamports = () =>
-    config?.sniperBundles === true && config.protectionBudget?.fresh === true && Date.now() - config.protectionBudget.checkedAt <= PROTECTION_BUDGET_MAX_AGE && isOn("bundle") && !bundleInput.disabled
+  const userFunded = () => config?.userFundedBatches === true && (!prepared || !!prepared.settings?.userBatches);
+  /** Sniper protection: the bundle size, when available and switched on. A
+   * user-funded launch buys exactly what its columns' slots add up to. */
+  const bundleLamports = () => userFunded() ? (launchColumns.read(scheduledNow()).totalLamports || null) :
+    config?.sniperBundles === true &&
+    (userFunded() || (config.protectionBudget?.fresh === true &&
+    Date.now() - config.protectionBudget.checkedAt <=
+      PROTECTION_BUDGET_MAX_AGE)) &&
+    isOn("bundle") &&
+    !bundleInput.disabled
       ? Math.round(BUNDLE_STOPS_SOL[Number(bundleInput.value)]! * 1e9)
       : null;
   function applyProtectionBudget() {
     const panel = find<HTMLElement>("sniper-protection");
-    panel.hidden = config?.sniperBundles !== true;
-    const limit = config?.protectionBudget?.fresh && Date.now() - config.protectionBudget.checkedAt <= PROTECTION_BUDGET_MAX_AGE ? config.protectionBudget.maxLamports : 0;
+    // Columns set a user-funded launch's buys; the slider and shares are for protection buys.
+    panel.hidden = config?.sniperBundles !== true || userFunded();
+    const observedLimit =
+      config?.protectionBudget?.fresh &&
+      Date.now() - config.protectionBudget.checkedAt <=
+        PROTECTION_BUDGET_MAX_AGE
+        ? config.protectionBudget.maxLamports
+        : 0;
+    const limit = Math.max(
+      userFunded() ? 5_000_000_000 : observedLimit,
+      editingPrepared ? (prepared?.settings?.bundleLamports ?? 0) : 0,
+    );
     const options = protectionOptions(limit, Number(bundleInput.value));
     const toggle = panel.querySelector<HTMLButtonElement>("[data-switch]")!;
-    bundleInput.max = String(Math.max(0, options.maxIndex));
-    bundleInput.value = String(options.selectedIndex);
+    if (options.available) {
+      bundleInput.max = String(options.maxIndex);
+      bundleInput.value = String(options.selectedIndex);
+    }
     bundleInput.disabled = toggle.disabled = !options.available;
-    if (!options.available) { toggle.setAttribute("aria-checked", "false"); panel.classList.add("is-off"); }
-    find<HTMLElement>("bundle-capacity").textContent = options.available
+    // A temporary capacity observation must not change the user's selection.
+    // Scheduled launches hide the switch, so switching off here stranded them.
+    find<HTMLElement>("user-batch-controls").hidden = !userFunded();
+    find<HTMLElement>("profit-controls").hidden = userFunded();
+    find<HTMLElement>("legacy-exit-controls").hidden = userFunded();
+    find<HTMLElement>("bundle-how").closest("details")!.hidden = userFunded();
+    find<HTMLElement>("t-bundle").textContent = userFunded() ? "02 / Fully funded launch buys" : "02 / Protection buy";
+    find<HTMLElement>("bundle-capacity").textContent = userFunded() ? "You fund the selected buys and execution reserves in full. This does not depend on LaunchSeeds's capital balance." : options.available
       ? `Protection available up to ${options.stops.at(-1)} SOL. The budget refreshes as earlier positions sell.`
-      : "Protection funds are replenishing. You can launch without protection.";
+      : "Waiting for available protection funds. Checking automatically.";
     const ticks = find<HTMLElement>("bundle-ticks");
-    ticks.replaceChildren(...options.stops.map(sol => { const node = document.createElement("span"); node.textContent = String(sol); return node; }));
+    ticks.replaceChildren(
+      ...options.stops.map((sol) => {
+        const node = document.createElement("span");
+        node.textContent = String(sol);
+        return node;
+      }),
+    );
     readSliders();
   }
   /** Reward fund only counts when its panel is on (not with sniper protection). */
-  const rewardFund = () => (isOn("fund") && !bundleLamports() ? dev.value.trim() || "0" : "0");
+  const rewardFund = () => "0";
   /** What the launcher sends beyond the base fee: reward fund + sniper-protection fee. */
   const extraSol = () => {
     const fund = Math.round(Number(rewardFund()) * 1e9) || 0;
-    return ((fund + bundleFeeLamports(bundleLamports())) / 1e9).toFixed(9).replace(/\.?0+$/, "") || "0";
+    if(userFunded()) {
+      const count=launchColumns.read(scheduledNow()).wallets;
+      return String(((bundleLamports() ?? 0)+count*14_000_000+100_000)/1e9);
+    }
+    return (
+      ((fund + bundleFeeLamports(bundleLamports())) / 1e9)
+        .toFixed(9)
+        .replace(/\.?0+$/, "") || "0"
+    );
   };
 
   /** The pressed chip's value in a chip group. */
   const pressed = (attribute: string) =>
-    form.querySelector<HTMLElement>(`[${attribute}][aria-pressed="true"]`)?.getAttribute(attribute) ?? "";
-  const exitPercent = () => Number(pressed("data-exit")) || BUNDLE_DEFAULT_EXIT_PERCENT;
-  const holdMs = () => Number(pressed("data-hold")) || null;
-  const feesToWallet = () => pressed("data-fees") === "wallet";
+    form
+      .querySelector<HTMLElement>(`[${attribute}][aria-pressed="true"]`)
+      ?.getAttribute(attribute) ?? "";
+  const exitPercent = () =>
+    Number(pressed("data-exit")) || BUNDLE_DEFAULT_EXIT_PERCENT;
 
   /** `strict`: a missing or invalid fee address is an error (on submit); the
    * live summary reads it as not yet chosen. */
   function readSettings(strict = true): LaunchSettings {
-    const holderRewards = isOn("holder");
-    const address = feesTo.value.trim();
+    const minutes = Number(launchMinutes.value);
+    if (strict && timeMode.value === "minutes" && (!Number.isInteger(minutes) || minutes < 3 || minutes > 10080)) throw new Error("Choose 3–10080 minutes from now.");
+    const scheduledAt = timeMode.value === "minutes" && Number.isInteger(minutes) && minutes >= 3 && minutes <= 10080 ? Date.now() + minutes * 60_000 : new Date(scheduledAtInput.value).getTime();
+    const shares = sharesInputs.map((i) => Math.round(Number(i.value) * 100));
+    const amount = bundleLamports();
+    const columnRead = launchColumns.read(scheduledAt);
+    if (userFunded() && strict && columnRead.error) throw new Error(columnRead.error);
+    const batches = userFunded() ? columnRead.value : null;
+    const feeReady = feeMode.value === "holders" || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(feesTo.value.trim());
+    if (strict && !feeReady) throw new Error("Enter a valid creator-fee wallet address.");
+    const walletReady = userFunded() ? batches !== null :
+      profitMode.value !== "wallet" ||
+      /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(profitWallet.value.trim());
+    const boostDuration = Number(boostMinutes.value) * 60_000;
+    const boostCount = Number(boostSteps.value);
+    const boostReady = userFunded() || profitMode.value === "wallet" || (Number.isSafeInteger(boostDuration) && boostDuration >= 60_000 && boostDuration <= 30 * 86_400_000 && Number.isInteger(boostCount) && boostCount >= 1 && boostCount <= 100);
+    if (strict && !boostReady) throw new Error("BOOST needs 1-43200 minutes and 1-100 buys.");
+    const valid =
+      feeReady &&
+      boostReady &&
+      Number.isFinite(scheduledAt) &&
+      amount !== null &&
+      (userFunded() || shares.reduce((a, b) => a + b, 0) === 10_000) &&
+      walletReady;
+    if (strict && !valid)
+      throw new Error(
+        "Choose a launch time, available protection and wallet shares adding to 100%.",
+      );
+    if (
+      strict &&
+      (scheduledAt < Date.now() + 120_000 ||
+        scheduledAt > Date.now() + 7 * 86_400_000)
+    )
+      throw new Error(
+        "Choose a launch time between 2 minutes and 7 days from now.",
+      );
+    if (strict) { if(batches)allocateUserBatches(batches,scheduledAt);else allocatedBudget(BigInt(amount!), shares); }
+    if (profitMode.value === "cashback")
+      throw new Error("Cashback rules are not finalized.");
     return parseLaunchSettings({
-      bundleExitPercent: exitPercent(),
-      bundleMaxHoldMs: holdMs(),
-      feesTo: holderRewards && feesToWallet() && (strict || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) ? address : null,
       firstStrategyLockMs: rules.firstStrategyLockMs,
       minimumActiveMs: rules.minimumActiveMs,
-      sniperSeconds: isOn("pow") ? SNIPER_SECONDS[Number(powInput.value)] : null,
-      liquidity: LIQUIDITY_AVAILABLE && isOn("liq")
-        ? {
-            feeShare: Number(shareInput.value),
-            minMcapUsd: MARKET_CAP_STOPS[Number(lowInput.value)],
-            maxMcapUsd: MARKET_CAP_STOPS[Number(highInput.value)],
-          }
-        : null,
-      holderRewards,
-      bundleLamports: bundleLamports(),
+      sniperSeconds: null,
+      liquidity: null,
+      publishMint: true,
+      publishProject: true,
+      userBatches: valid ? batches : null,
+      holderRewards: feeMode.value === "holders" || (!strict && !valid),
+      feesTo: feeMode.value === "creator" && (strict || valid) ? feesTo.value.trim() : null,
+      bundleLamports: amount,
+      bundleExitPercent: exitPercent(),
+      bundleMaxHoldMs: null,
+      scheduledAt: valid ? scheduledAt : null,
+      walletSharesBps: valid && !batches ? shares : null,
+      boost: userFunded() || profitMode.value === "wallet" || (!strict && !valid) ? null : {
+        durationMs: boostDuration,
+        steps: boostCount,
+      },
+      profitPolicy: batches ? {mode:"wallet",wallet:batches.proceedsWallet} :
+        profitMode.value === "wallet"
+          ? strict || profitWallet.value.trim()
+            ? { mode: "wallet", wallet: profitWallet.value.trim() }
+            : null
+          : profitMode.value === "token" ? { mode: "token" } : { mode: "burn" },
     });
   }
 
@@ -231,90 +341,93 @@ export default function mount() {
     bundleInput.setAttribute("aria-valuetext", size);
     find<HTMLElement>("bundle-fee").textContent =
       `${(bundleFeeLamports(Math.round(BUNDLE_STOPS_SOL[stop]! * 1e9)) / 1e9).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} SOL`;
-    const how = (key: string) => form.querySelector<HTMLElement>(`[data-how-${key}]`)!;
+    const how = (key: string) =>
+      form.querySelector<HTMLElement>(`[data-how-${key}]`)!;
     how("size").textContent = size;
     how("exit").textContent = `${exitPercent()}%`;
-    how("back").textContent = `${+((BUNDLE_STOPS_SOL[stop]! * exitPercent()) / 100).toFixed(4)} SOL`;
-    const limit = holdMs();
-    how("hold").hidden = !limit;
-    if (limit) how("limit").textContent = durationText(limit);
-    const lastPow = SNIPER_SECONDS.length - 1;
-    const pow = Number(powInput.value);
-    fill(powInput, 0, (pow / lastPow) * 100);
-    const seconds = secondsText(SNIPER_SECONDS[pow]!);
-    form.querySelector("[data-pow-out]")!.textContent = seconds;
-    powInput.setAttribute("aria-valuetext", seconds);
-    const share = Number(shareInput.value);
-    fill(shareInput, 0, ((share - 1) / (MAX_LIQUIDITY_SHARE - 1)) * 100);
-    form.querySelector("[data-share-out]")!.textContent = String(share);
-    shareInput.setAttribute("aria-valuetext", `${share}%`);
-    const lastStop = MARKET_CAP_STOPS.length - 1;
-    let lo = Number(lowInput.value), hi = Number(highInput.value);
-    if (lo >= hi) {
-      if (document.activeElement === lowInput) lowInput.value = String((lo = hi - 1));
-      else highInput.value = String((hi = lo + 1));
-    }
-    fill(lowInput, (lo / lastStop) * 100, (hi / lastStop) * 100);
-    const low = compactUsd(MARKET_CAP_STOPS[lo]!), high = compactUsd(MARKET_CAP_STOPS[hi]!);
-    form.querySelector("[data-range-out]")!.textContent = `${low}–${high}`;
-    lowInput.setAttribute("aria-valuetext", low);
-    highInput.setAttribute("aria-valuetext", high);
+    how("back").textContent =
+      `${+((BUNDLE_STOPS_SOL[stop]! * exitPercent()) / 100).toFixed(4)} SOL`;
   }
 
   function showSettingsSummary() {
     const settings = readSettings(false);
-    // A holder-reward coin has no treasury, strategy or LaunchSeeds fee split:
-    // Pump pays its fees straight to holders (or the chosen wallet).
-    const holderCoin = settings.holderRewards;
-    find<HTMLElement>("summary-starts").hidden = holderCoin;
-    find<HTMLElement>("summary-fee-split").hidden = holderCoin;
-    const bundleFee = bundleFeeLamports(settings.bundleLamports);
-    form.ownerDocument.querySelectorAll<HTMLElement>("[data-summary-bundle]").forEach((n) => (n.hidden = !bundleFee));
-    find<HTMLElement>("summary-bundle-fee").textContent = `${bundleFee / 1e9} SOL`;
-    form.ownerDocument.querySelectorAll<HTMLElement>("[data-summary-fund]").forEach((n) => (n.hidden = holderCoin && rewardFund() === "0"));
-    const rows: [string, string][] = [
-      ...(holderCoin ? [] : [
-        ["Strategy lock", durationText(settings.firstStrategyLockMs)],
-        ["Minimum active", durationText(settings.minimumActiveMs)],
-      ] as [string, string][]),
-      ["Sniper protection", settings.bundleLamports
-        ? `${settings.bundleLamports / 1e9} SOL bundle · ${bundleFeeLamports(settings.bundleLamports) / 1e9} SOL fee`
-        : "Off"],
-      ...(settings.bundleLamports ? [
-        ["Bundle sells", `at ${settings.bundleExitPercent}%${settings.bundleMaxHoldMs ? `, or at market after ${durationText(settings.bundleMaxHoldMs)}` : ""}`] as [string, string],
-      ] : []),
-      ...(settings.holderRewards ? [
-        ["Creator fees", settings.feesTo ? `To ${short(settings.feesTo)}` : "To holders"] as [string, string],
-      ] : []),
-      ...(settings.sniperSeconds !== null && !holderCoin ? [["Buyer puzzle", sniperDescription(settings)] as [string, string]] : []),
-      ...(settings.liquidity ? [["Liquidity", `${settings.liquidity.feeShare}% · ${rangeText(settings)}`] as [string, string]] : []),
-      ...(holderCoin ? [] : [["Holder rewards", "Off · fees fund the treasury"] as [string, string]]),
+    find<HTMLElement>("creator-fees-field").hidden = feeMode.value !== "creator";
+    find<HTMLElement>("profit-wallet-field").hidden =
+      profitMode.value !== "wallet";
+    find<HTMLElement>("boost-controls").hidden = profitMode.value === "wallet";
+    const amount = bundleLamports();
+    const shares = sharesInputs.map((i) => Math.round(Number(i.value) * 100));
+    const total = shares.reduce((a, b) => a + b, 0);
+    find<HTMLElement>("allocation-total").textContent =
+      `${total / 100}%${total === 10000 ? "" : " - must total 100%"}`;
+    let buys: bigint[] = [];
+    try {
+      if (amount) buys = allocatedBudget(BigInt(amount), shares);
+    } catch {}
+    sharesInputs.forEach(
+      (_, i) =>
+        (find<HTMLElement>(`wallet-buy-${i}`).textContent =
+          buys[i] !== undefined
+            ? `${Number(buys[i]) / 1e9} SOL`
+            : "Check allocation"),
+    );
+    const fee = bundleFeeLamports(amount);
+    document
+      .querySelectorAll<HTMLElement>("[data-summary-bundle]")
+      .forEach((n) => (n.hidden = !amount));
+    document
+      .querySelectorAll<HTMLElement>("[data-summary-fund]")
+      .forEach((n) => (n.hidden = true));
+    find<HTMLElement>("summary-bundle-fee").textContent = `${fee / 1e9} SOL`;
+    // A user-funded launch pays no protection fee: its extra SOL is the buys
+    // themselves plus each wallet's network reserve and the Jito tip.
+    const columnRead = userFunded() ? launchColumns.read(scheduledNow()) : null;
+    find<HTMLElement>("summary-bundle-label").textContent = columnRead
+      ? `Buys + ${columnRead.wallets} wallet reserve${columnRead.wallets === 1 ? "" : "s"}`
+      : "Sniper protection (3%)";
+    if (columnRead) find<HTMLElement>("summary-bundle-fee").textContent =
+      `${(columnRead.totalLamports + columnRead.wallets * 14_000_000 + 100_000) / 1e9} SOL`;
+    const rows = [
+      [
+        "Launch time",
+        settings.scheduledAt
+          ? new Date(settings.scheduledAt).toLocaleString()
+          : "Choose a time",
+      ],
+      ["Protection", amount ? `${amount / 1e9} SOL` : "Awaiting capacity"],
+      ["Wallet allocation", shares.map((n) => `${n / 100}%`).join(" / ")],
+      ["Sell target", `+${exitPercent() - 100}% per wallet`],
+      ["Trading fees", feeMode.value === "holders" ? "Pump holder rewards" : feesTo.value.trim() || "Enter creator-fee wallet"],
+      ...(profitMode.value === "wallet" ? [] : [["BOOST", `${boostMinutes.value || "?"} min / up to ${boostSteps.value || "?"} buys after sale`]]),
+      [
+        "Profit destination",
+        profitMode.value === "burn"
+          ? "Buy & burn"
+          : profitMode.value === "token" ? "$TOKEN holder; approval required" : profitWallet.value.trim() || "Enter a wallet",
+      ],
     ];
+    if(userFunded()) {
+      rows.splice(1,rows.length-1,["Launch buy",amount?`${amount/1e9} SOL (fully funded)`:"Choose each wallet's buy"],...launchColumns.summary(),
+        ["Trading fees", feeMode.value === "holders" ? "Pump holder rewards" : feesTo.value.trim() || "Enter creator-fee wallet"],
+        ["Proceeds", find<HTMLInputElement>("f-proceeds-wallet").value.trim() || "Enter a wallet"]);
+    }
+    // Links go into the coin's metadata: worth a last look before paying.
+    const xUrl = xLink(normalizeX(x.value));
+    rows.push(
+      ["Website", websiteOwn.checked && website.value.trim() ? website.value.trim() : "This coin's LaunchSeeds page"],
+      ["X", x.value.trim() ? xUrl || "Invalid X link" : "None"],
+      ...(telegram.value.trim() ? [["Telegram", telegramLink(telegram.value) || "Invalid Telegram link"]] : []),
+    );
     render(
-      <>{rows.map(([term, value]) => <><dt>{term}</dt><dd>{value}</dd></>)}</>,
+      <>
+        {rows.map(([term, value]) => (
+          <>
+            <dt>{term}</dt>
+            <dd>{value}</dd>
+          </>
+        ))}
+      </>,
       find<HTMLElement>("summary-rules"),
-    );
-    const split = feeSplit(liquidityShare(settings));
-    const parts: [string, number, string][] = [
-      ["Rewards", split.rewardsPercent, "var(--accent)"],
-      ["Liquidity", split.liquidityPercent, "var(--s-burn)"],
-      ["$TOKEN", split.tokenPercent, "var(--muted)"],
-    ];
-    const shown = parts.filter(([, pct]) => pct > 0);
-    const bar = find<HTMLElement>("launch-fee-split");
-    bar.setAttribute(
-      "aria-label",
-      `${split.tokenPercent}% to $TOKEN, ${split.liquidityPercent}% to liquidity, ${split.rewardsPercent}% to holder rewards`,
-    );
-    render(
-      <>{shown.map(([, pct, color]) => <i style={{ width: `${pct}%`, background: color }} />)}</>,
-      bar,
-    );
-    render(
-      <>{shown.map(([label, pct, color]) => (
-        <span><i style={{ background: color }} />{`${label} `}<b>{`${pct}%`}</b></span>
-      ))}</>,
-      find<HTMLElement>("launch-fee-legend"),
     );
   }
 
@@ -369,30 +482,13 @@ export default function mount() {
         .join("")
         .toUpperCase();
     }
-    find<HTMLElement>("summary-dev").textContent = rewardFund();
-    find<HTMLElement>("reward-fund-ticker").textContent = `$${symbol}`;
     updateAvailability();
-    try { readSliders(); showSettingsSummary(); } catch { /* Invalid setting is reported on submit. */ }
-    form.querySelectorAll<HTMLButtonElement>("[data-dev]").forEach((button) => {
-      button.setAttribute(
-        "aria-pressed",
-        String(Number(button.dataset.dev) === Number(dev.value)),
-      );
-    });
-    const description = current ? strategySummary(current, catalog) : null;
-    render(
-      description ? (
-        <div className="strategy-preview">
-          <strong className="strategy-preview__name">
-            {description.title}
-          </strong>
-          <span className="strategy-preview__detail">{description.detail}</span>
-        </div>
-      ) : (
-        <span className="muted">Choose a starting strategy</span>
-      ),
-      previewRoot,
-    );
+    try {
+      readSliders();
+      showSettingsSummary();
+    } catch {
+      /* Invalid setting is reported on submit. */
+    }
   };
 
   function showImage(file: File) {
@@ -440,17 +536,25 @@ export default function mount() {
       });
       if (!response.ok) {
         const data = await response.json().catch(() => null);
-        throw new Error(typeof data?.error === "string" ? data.error : "Image generation failed.");
+        throw new Error(
+          typeof data?.error === "string"
+            ? data.error
+            : "Image generation failed.",
+        );
       }
       const blob = await response.blob();
-      const file = new File([blob], `${ticker.value.trim() || "token"}.png`, { type: "image/png" });
+      const file = new File([blob], `${ticker.value.trim() || "token"}.png`, {
+        type: "image/png",
+      });
       // Same path as a picked file: validation, preview and upload at submit.
       const transfer = new DataTransfer();
       transfer.items.add(file);
       image.files = transfer.files;
       image.dispatchEvent(new Event("change", { bubbles: true }));
     } catch (error) {
-      showError(error instanceof Error ? error.message : "Image generation failed.");
+      showError(
+        error instanceof Error ? error.message : "Image generation failed.",
+      );
     } finally {
       generateButton.disabled = false;
       generateButton.classList.remove("is-busy");
@@ -462,14 +566,22 @@ export default function mount() {
   /** Clone: fill the form from an existing coin (name, ticker, links, image). */
   cloneButton.addEventListener("click", async () => {
     const mint = cloneInput.value.trim();
-    if (!mint) { cloneInput.focus(); return; }
+    if (!mint) {
+      cloneInput.focus();
+      return;
+    }
     cloneButton.disabled = true;
     cloneStatus.hidden = false;
     cloneStatus.textContent = "Reading the coin…";
     try {
-      const coin = await getJson<{ name: string; symbol: string; website: string; x: string; telegram: string; image: string | null }>(
-        `/api/clone?mint=${encodeURIComponent(mint)}`,
-      );
+      const coin = await getJson<{
+        name: string;
+        symbol: string;
+        website: string;
+        x: string;
+        telegram: string;
+        image: string | null;
+      }>(`/api/clone?mint=${encodeURIComponent(mint)}`);
       name.value = coin.name;
       ticker.value = coin.symbol;
       // A clone never takes the original's website: it gets its own page.
@@ -479,18 +591,27 @@ export default function mount() {
       if (coin.image) {
         const blob = await (await fetch(coin.image)).blob();
         const transfer = new DataTransfer();
-        transfer.items.add(new File([blob], `${coin.symbol || "token"}.${blob.type.split("/")[1] || "png"}`, { type: blob.type }));
+        transfer.items.add(
+          new File(
+            [blob],
+            `${coin.symbol || "token"}.${blob.type.split("/")[1] || "png"}`,
+            { type: blob.type },
+          ),
+        );
         image.files = transfer.files;
         image.dispatchEvent(new Event("change", { bubbles: true }));
       }
-      const links = [coin.x && "X", coin.telegram && "Telegram"].filter(Boolean);
+      const links = [coin.x && "X", coin.telegram && "Telegram"].filter(
+        Boolean,
+      );
       cloneResult.hidden = false;
       cloneResult.textContent = `Cloned ${coin.name} ($${coin.symbol})${coin.image ? " with its image" : " (no image found)"}${links.length ? `; copied its ${links.join(", ")} link${links.length > 1 ? "s" : ""}. Check them before launching.` : "."} It launches as a new coin.`;
       cloneStatus.hidden = true;
       cloneDialog.close();
       sync();
     } catch (error) {
-      cloneStatus.textContent = error instanceof Error ? error.message : "That coin could not be read.";
+      cloneStatus.textContent =
+        error instanceof Error ? error.message : "That coin could not be read.";
     } finally {
       cloneButton.disabled = false;
     }
@@ -502,7 +623,10 @@ export default function mount() {
     cloneInput.focus();
   });
   cloneInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") { event.preventDefault(); cloneButton.click(); }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      cloneButton.click();
+    }
   });
 
   const onDetailChanged = (event: Event) => {
@@ -510,16 +634,10 @@ export default function mount() {
   };
   form.addEventListener("input", onDetailChanged);
   form.addEventListener("change", onDetailChanged);
-  form.querySelectorAll<HTMLButtonElement>("[data-dev]").forEach((button) => {
-    button.addEventListener("click", () => {
-      dev.value = button.dataset.dev || "0";
-      sync();
-    });
-  });
   /** "Write my own" / "My own": unlocks the field; unticked, it reverts to its default. */
   function setOverride(box: HTMLInputElement, on: boolean) {
     box.checked = on;
-    const field = find<HTMLInputElement>(box.dataset.override!);
+    const field = find<HTMLInputElement | HTMLTextAreaElement>(box.dataset.override!);
     field.readOnly = !on;
     field.setAttribute("aria-readonly", String(!on));
     field.closest(".input-locked")?.classList.toggle("is-open", on);
@@ -533,32 +651,32 @@ export default function mount() {
     });
   }
   /** Chip groups: one pressed at a time. */
-  for (const attribute of ["data-exit", "data-hold", "data-fees"]) {
+  for (const attribute of ["data-exit"]) {
     const chips = form.querySelectorAll<HTMLButtonElement>(`[${attribute}]`);
-    chips.forEach((chip) => chip.addEventListener("click", () => {
-      chips.forEach((other) => {
-        other.setAttribute("aria-pressed", String(other === chip));
-        if (other.getAttribute("role") === "radio") other.setAttribute("aria-checked", String(other === chip));
-      });
-      if (attribute === "data-fees") showFeeChoice();
-      sync();
-    }));
-  }
-  function showFeeChoice() {
-    const wallet = feesToWallet();
-    feesTo.hidden = !wallet;
-    find<HTMLElement>("holder-note").textContent = wallet
-      ? "Pump pays the coin's creator fees to this wallet instead of to holders."
-      : "Pump pays the coin's trading fees to its holders in SOL, automatically.";
-    if (wallet) feesTo.focus();
+    chips.forEach((chip) =>
+      chip.addEventListener("click", () => {
+        chips.forEach((other) => {
+          other.setAttribute("aria-pressed", String(other === chip));
+          if (other.getAttribute("role") === "radio")
+            other.setAttribute("aria-checked", String(other === chip));
+        });
+        sync();
+      }),
+    );
   }
   // On/off panels.
   form.querySelectorAll<HTMLElement>("[data-toggle-panel]").forEach((panel) => {
     const toggle = panel.querySelector<HTMLButtonElement>("[data-switch]")!;
     const apply = () =>
-      panel.classList.toggle("is-off", toggle.getAttribute("aria-checked") !== "true");
+      panel.classList.toggle(
+        "is-off",
+        toggle.getAttribute("aria-checked") !== "true",
+      );
     toggle.addEventListener("click", () => {
-      toggle.setAttribute("aria-checked", String(toggle.getAttribute("aria-checked") !== "true"));
+      toggle.setAttribute(
+        "aria-checked",
+        String(toggle.getAttribute("aria-checked") !== "true"),
+      );
       apply();
       sync();
     });
@@ -566,7 +684,12 @@ export default function mount() {
   });
 
   editDetails.addEventListener("click", () => {
-    if (!prepared || prepared.receivedLamports > 0 || prepared.status !== "funding") return;
+    if (
+      !prepared ||
+      prepared.receivedLamports > 0 ||
+      prepared.status !== "funding"
+    )
+      return;
     editingPrepared = true;
     stopTimers();
     statusPanel.hidden = true;
@@ -590,10 +713,14 @@ export default function mount() {
       const built = await postJson<{ transaction: string }>(
         "/api/launch-payment",
         { handle: launchHandle, wallet },
-        { headers: { authorization: `Bearer ${capability}` }, timeoutMs: 20_000 },
+        {
+          headers: { authorization: `Bearer ${capability}` },
+          timeoutMs: 20_000,
+        },
       );
       await sendWalletTransaction(built.transaction);
-      feedback.textContent = "Payment sent. Waiting for the network to confirm it.";
+      feedback.textContent =
+        "Payment sent. Waiting for the network to confirm it.";
       void requestStatus().catch(() => {});
     } catch {
       feedback.textContent =
@@ -624,7 +751,8 @@ export default function mount() {
       return;
     }
     void loadFreeConfig().then((loaded) => {
-      if (!freeRunning) freeButton.hidden = !eligible || !loaded?.freeLaunch?.available;
+      if (!freeRunning)
+        freeButton.hidden = !eligible || !loaded?.freeLaunch?.available;
     });
   }
 
@@ -642,14 +770,30 @@ export default function mount() {
   };
   let miner: ReturnType<typeof createMiner> | null = null;
   let mineFound = false; // a proof was found: keep the panel showing the claim result
-  let puzzle: { challenge: string; bits: number; expiresAt: number; poolLamports: number | null } | null = null;
-  const freeAuth = () => ({ headers: { authorization: `Bearer ${capability}` }, timeoutMs: 20_000 });
+  let puzzle: {
+    challenge: string;
+    bits: number;
+    expiresAt: number;
+    poolLamports: number | null;
+  } | null = null;
+  const freeAuth = () => ({
+    headers: { authorization: `Bearer ${capability}` },
+    timeoutMs: 20_000,
+  });
   const clock = (sec: number) => {
     sec = Math.max(0, Math.round(sec));
-    return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+    return sec < 60
+      ? `${sec}s`
+      : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
   };
   const big = (n: number) =>
-    n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n);
+    n >= 1e9
+      ? `${(n / 1e9).toFixed(2)}B`
+      : n >= 1e6
+        ? `${(n / 1e6).toFixed(1)}M`
+        : n >= 1e3
+          ? `${Math.round(n / 1e3)}K`
+          : String(n);
   const mineText = (title: string, sub: string, tone?: "ok" | "error") => {
     mine.title.textContent = title;
     mine.title.classList.toggle("is-ok", tone === "ok");
@@ -682,12 +826,19 @@ export default function mount() {
     freeStatus.hidden = true;
     freeStatus.classList.remove("is-error");
     try {
-      puzzle = await postJson("/api/free-launch", { action: "challenge", handle: launchHandle }, freeAuth());
+      puzzle = await postJson(
+        "/api/free-launch",
+        { action: "challenge", handle: launchHandle },
+        freeAuth(),
+      );
     } catch (error) {
       freeRunning = false;
       freeStatus.hidden = false;
       freeStatus.classList.add("is-error");
-      freeStatus.textContent = error instanceof Error ? error.message : "Free launch is not available. You can still pay.";
+      freeStatus.textContent =
+        error instanceof Error
+          ? error.message
+          : "Free launch is not available. You can still pay.";
       return;
     } finally {
       freeButton.classList.remove("is-busy");
@@ -699,9 +850,12 @@ export default function mount() {
       "Your browser hashes until it finds one below the target. Usually a few seconds on a laptop, longer on a phone, sooner if you're lucky. Up to 3 free launches per day.",
     );
     const zeros = Math.floor(puzzle!.bits / 4);
-    find<HTMLElement>("mine-target").textContent = "0".repeat(zeros) + "f".repeat(64 - zeros);
+    find<HTMLElement>("mine-target").textContent =
+      "0".repeat(zeros) + "f".repeat(64 - zeros);
     find<HTMLElement>("mine-pool").textContent =
-      puzzle!.poolLamports == null ? "—" : `${(puzzle!.poolLamports / 1e9).toFixed(2)} SOL`;
+      puzzle!.poolLamports == null
+        ? "—"
+        : `${(puzzle!.poolLamports / 1e9).toFixed(2)} SOL`;
     mine.start.focus();
   });
 
@@ -711,10 +865,14 @@ export default function mount() {
       resetMine();
       freeButton.hidden = false;
       freeStatus.hidden = false;
-      freeStatus.textContent = "The puzzle expired. Press Mine Free Launch to get a new one.";
+      freeStatus.textContent =
+        "The puzzle expired. Press Mine Free Launch to get a new one.";
       return;
     }
-    miner ??= createMiner({ seed: puzzle.challenge, bits: puzzle.bits }, { onProgress: progress, onFound: found });
+    miner ??= createMiner(
+      { seed: puzzle.challenge, bits: puzzle.bits },
+      { onProgress: progress, onFound: found },
+    );
     showMineDetail(true);
     mineText("Mining…", "Keep this tab open. You can still pay at any time.");
     mine.start.hidden = true;
@@ -734,16 +892,25 @@ export default function mount() {
   function progress(p: MineProgress) {
     const expected = 2 ** puzzle!.bits;
     const pct = Math.min(100, (p.hashes / expected) * 100);
-    find<HTMLElement>("mine-speed").textContent =
-      !p.speed ? "…" : p.speed >= 1e6 ? `${(p.speed / 1e6).toFixed(2)} MH/s` : `${Math.round(p.speed / 1e3)} kH/s`;
+    find<HTMLElement>("mine-speed").textContent = !p.speed
+      ? "…"
+      : p.speed >= 1e6
+        ? `${(p.speed / 1e6).toFixed(2)} MH/s`
+        : `${Math.round(p.speed / 1e3)} kH/s`;
     find<HTMLElement>("mine-hashes").textContent = big(p.hashes);
     find<HTMLElement>("mine-time").textContent = clock(p.seconds);
-    find<HTMLElement>("mine-expected").textContent = p.speed ? `~${clock(expected / p.speed)}` : "…";
+    find<HTMLElement>("mine-expected").textContent = p.speed
+      ? `~${clock(expected / p.speed)}`
+      : "…";
     if (p.bestHex) mine.best.textContent = p.bestHex;
     if (p.now) find<HTMLElement>("mine-now").textContent = p.now;
     mine.work.style.width = `${pct.toFixed(1)}%`;
-    mine.work.parentElement!.setAttribute("aria-valuenow", String(Math.round(pct)));
-    find<HTMLElement>("mine-work-text").textContent = `${Math.round((p.hashes / expected) * 100)}% of expected work`;
+    mine.work.parentElement!.setAttribute(
+      "aria-valuenow",
+      String(Math.round(pct)),
+    );
+    find<HTMLElement>("mine-work-text").textContent =
+      `${Math.round((p.hashes / expected) * 100)}% of expected work`;
   }
 
   async function found(f: MineFound) {
@@ -754,19 +921,33 @@ export default function mount() {
     mine.best.classList.add("is-ok");
     mine.work.style.width = "100%";
     mine.work.parentElement!.classList.add("is-ok");
-    find<HTMLElement>("mine-work-text").textContent = `Found after ${big(f.hashes)} hashes in ${clock(f.seconds)}`;
+    find<HTMLElement>("mine-work-text").textContent =
+      `Found after ${big(f.hashes)} hashes in ${clock(f.seconds)}`;
     mineText("Found it. Checking…", "Sending your answer to be verified.");
     try {
       await postJson<{ signature: string }>(
         "/api/free-launch",
-        { action: "claim", handle: launchHandle, challenge: puzzle!.challenge, nonce: String(f.nonce) },
+        {
+          action: "claim",
+          handle: launchHandle,
+          challenge: puzzle!.challenge,
+          nonce: String(f.nonce),
+        },
         freeAuth(),
       );
-      mineText("Found it. Your launch is free.", "The launch fee was sent from the free launch pool. Launching once the network confirms it.", "ok");
+      mineText(
+        "Found it. Your launch is free.",
+        "The launch fee was sent from the free launch pool. Launching once the network confirms it.",
+        "ok",
+      );
       payButton.hidden = true;
       void requestStatus().catch(() => {});
     } catch (error) {
-      mineText("That answer was not accepted", error instanceof Error ? error.message : "Try again, or pay in wallet.", "error");
+      mineText(
+        "That answer was not accepted",
+        error instanceof Error ? error.message : "Try again, or pay in wallet.",
+        "error",
+      );
       miner = null;
       puzzle = null;
       mineFound = false;
@@ -798,17 +979,48 @@ export default function mount() {
   }
 
   function showStatus(status: PublicLaunchStatus) {
+    // Saved links reopen as entered, so the summary shows what goes on chain.
+    if (status.website !== undefined) {
+      const own = !!status.website && !status.website.includes("/coin/");
+      setOverride(websiteOwn, own);
+      if (own) website.value = status.website;
+    }
+    if (status.x !== undefined) x.value = status.x;
+    if (status.telegram !== undefined) telegram.value = status.telegram;
+    // A saved custom description reopens unlocked; the default stays locked.
+    if (status.description !== undefined) {
+      const own = status.description.trim() !== "" && status.description !== descriptionInput.dataset.default;
+      setOverride(descriptionOwn, own);
+      if (own) descriptionInput.value = status.description;
+    }
     if (destroyed) return;
     prepared = status;
+    const reserved = find<HTMLElement>("reserved-ca-preview");
+    reserved.hidden = !status.mint;
+    find<HTMLElement>("reserved-ca-value").textContent = status.mint;
+    find<HTMLElement>("reserved-ca-copy").dataset.copy = status.mint;
+    if (status.settings) {
+      if (status.settings.scheduledAt) {
+        const date = new Date(status.settings.scheduledAt);
+        scheduledAtInput.value = new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0,16);
+        timeMode.value = "date"; timeModeChanged();
+      }
+      if(status.settings.userBatches && status.settings.scheduledAt) launchColumns.restore(status.settings.userBatches, status.settings.scheduledAt);
+      feeMode.value = status.settings.feesTo ? "creator" : "holders";
+      feesTo.value = status.settings.feesTo ?? "";
+      find<HTMLElement>("creator-fees-field").hidden = feeMode.value !== "creator";
+    }
     launchHandle = status.handle;
     // Public launch status also supplies the token identity on a direct
     // /launch?launch=… visit. Never leave the designer's sample $SLAB label.
     const symbol = status.symbol.replace(/^\$/, "").toUpperCase();
     find<HTMLElement>("summary-ticker").textContent = `$${symbol}`;
     find<HTMLElement>("summary-name").textContent = status.name;
-    statusPanel.querySelectorAll<HTMLElement>("[data-bind-ticker]").forEach((label) => {
-      label.textContent = `$${symbol}`;
-    });
+    statusPanel
+      .querySelectorAll<HTMLElement>("[data-bind-ticker]")
+      .forEach((label) => {
+        label.textContent = `$${symbol}`;
+      });
     const link = launchUrl(status.handle);
     if (link && location.pathname + location.search !== link) {
       history.replaceState(null, "", link);
@@ -828,39 +1040,98 @@ export default function mount() {
       : view.phase === "deploying"
         ? 1
         : 0;
-    find<HTMLElement>("step-token").textContent = live ? "Token created"
-      : status.launchSignature ? "Confirming token" : "Creating token";
+    find<HTMLElement>("step-token").textContent = live
+      ? "Token created"
+      : status.launchSignature
+        ? "Confirming token"
+        : "Creating token";
     visible.forEach((step, index) => {
       step.classList.toggle("is-done", index < completed);
-      step.classList.toggle("is-current", index === completed && view.phase !== "failed");
+      step.classList.toggle(
+        "is-current",
+        index === completed && view.phase !== "failed",
+      );
     });
     find<HTMLElement>("step-payment").firstChild!.textContent =
-      view.phase === "funding" ? "Waiting for payment" : "Payment received";
+      view.phase === "funding" &&
+      status.receivedLamports < status.requiredLamports
+        ? "Waiting for payment"
+        : "Payment received";
     find<HTMLElement>("reward-fund-amount").textContent =
       `${fundAmount.toLocaleString("en-US", { maximumFractionDigits: 9 })} SOL`;
     if (live && fundAmount > 0 && !status.rewardFundVerified)
-      fundStep.title = "Awaiting a confirmed treasury token-balance observation";
+      fundStep.title =
+        "Awaiting a confirmed treasury token-balance observation";
 
     statusPanel.hidden = false;
     form.hidden = true;
     find<HTMLElement>("submit-wrap").hidden = true;
     find<HTMLElement>("step-details").className = "is-done";
-    find<HTMLElement>("step-deposit").className = live ? "is-done" : "is-current";
+    find<HTMLElement>("step-deposit").className = live
+      ? "is-done"
+      : "is-current";
     find<HTMLElement>("step-live").className = live ? "is-done" : "";
-    for (const [id, done, number] of [["step-details", true, "1"], ["step-deposit", live, "2"], ["step-live", live, "3"]] as const) {
+    for (const [id, done, number] of [
+      ["step-details", true, "1"],
+      ["step-deposit", live, "2"],
+      ["step-live", live, "3"],
+    ] as const) {
       const marker = find<HTMLElement>(id).querySelector("span");
       if (marker) marker.textContent = done ? "✓" : number;
     }
     editingPrepared = false;
-    editDetails.hidden = view.phase !== "funding" || status.receivedLamports > 0 || !capability;
+    editDetails.hidden =
+      view.phase !== "funding" || status.receivedLamports > 0 || !capability;
     payButton.hidden = !view.canFund || !capability;
     paintFreeLaunch(status);
-    find<HTMLElement>("pay-title").textContent = live ? "Launched" : view.canFund ? "Pay to launch" : "Launching";
+    find<HTMLElement>("step-treasury").textContent = status.settings
+      ?.scheduledAt
+      ? "Protection wallets prepared"
+      : "Treasury created";
+    find<HTMLElement>("step-strategy").textContent = status.settings
+      ?.scheduledAt
+      ? "Published plan recorded"
+      : "Strategy and rules set";
+    const delayed = status.plan?.status === "delayed";
+    const scheduled =
+      !!status.settings?.scheduledAt &&
+      status.status === "funding" &&
+      status.receivedLamports >= status.requiredLamports;
+    find<HTMLElement>("pay-title").textContent = live
+      ? "Launched"
+      : scheduled
+        ? delayed
+          ? "Launch delayed"
+          : "Launch scheduled"
+        : view.canFund
+          ? status.settings?.scheduledAt
+            ? "Fund your schedule"
+            : "Pay to launch"
+          : "Launching";
+    const planRoot = find<HTMLElement>("funded-plan-preview");
+    planRoot.hidden = !status.plan;
+    if (status.plan)
+      // The summary above already lists the plan; the coin page has it in full.
+      render(
+        <a className="btn" href={`/coin/${status.plan.mint ?? status.plan.planHash}`}>
+          View coin page
+        </a>,
+        planRoot,
+      );
     // Moving bar and spinner while preparing, waiting for payment or deploying.
     find<HTMLElement>("launch-busy").hidden = !view.waiting;
     find<HTMLElement>("launch-scan").hidden = !view.waiting;
-    find<HTMLElement>("launch-busy-text").textContent =
-      view.canFund ? "Waiting for payment" : view.phase === "preparing" ? "Preparing" : status.launchSignature ? "Confirming transaction" : "Launching";
+    find<HTMLElement>("launch-busy-text").textContent = view.canFund
+      ? "Waiting for payment"
+      : scheduled
+        ? delayed
+          ? "Awaiting execution"
+          : "Scheduled"
+        : view.phase === "preparing"
+          ? "Preparing"
+          : status.launchSignature
+            ? "Confirming transaction"
+            : "Launching";
     statusText.textContent = view.canFund
       ? `${view.receivedSol} SOL received so far.`
       : view.message;
@@ -875,14 +1146,18 @@ export default function mount() {
     const amountCopy = find<HTMLButtonElement>("copy-amount");
     amountCopy.onclick = async () => {
       const ok = await copyText(view.requiredSol);
-      feedback.textContent = ok ? "Exact SOL amount copied." : "Select the amount to copy.";
+      feedback.textContent = ok
+        ? "Exact SOL amount copied."
+        : "Select the amount to copy.";
     };
     const qr = find<HTMLImageElement>("payment-qr");
     if (view.showAddress) {
       address.textContent = status.fundingWallet;
       copy.onclick = async () => {
         const ok = await copyText(status.fundingWallet);
-        feedback.textContent = ok ? "Address copied." : "Select the address to copy.";
+        feedback.textContent = ok
+          ? "Address copied."
+          : "Select the address to copy.";
       };
       const uri = solanaPayUri(status.fundingWallet, view.requiredSol, symbol);
       if (qr.dataset.uri !== uri) {
@@ -890,7 +1165,11 @@ export default function mount() {
         qr.hidden = true;
         void import("qrcode")
           .then(({ default: QRCode }) =>
-            QRCode.toDataURL(uri, { width: 200, margin: 1, errorCorrectionLevel: "M" }),
+            QRCode.toDataURL(uri, {
+              width: 200,
+              margin: 1,
+              errorCorrectionLevel: "M",
+            }),
           )
           .then((source) => {
             if (qr.dataset.uri === uri && !destroyed) {
@@ -909,6 +1188,7 @@ export default function mount() {
       qr.dataset.uri = "";
       if (countdown) clearInterval(countdown);
       countdown = null;
+      find<HTMLElement>("payment-expires").hidden = true;
     }
 
     const progress = find<HTMLElement>("deposit-progress");
@@ -929,7 +1209,7 @@ export default function mount() {
       const art = avatar.querySelector("img");
       if (art) liveAvatar.replaceChildren(art.cloneNode());
       else liveAvatar.textContent = avatar.textContent;
-      const text = `$${symbol} is live on LaunchSeeds. Holders vote on what its fees pay for.`;
+      const text = `$${symbol} is live on ${document.querySelector("[data-brand]")?.getAttribute("data-brand") === "launchseeds" ? "LaunchSeeds" : "LaunchSeeds"}. Public launch plan and protection-wallet rules.`;
       find<HTMLAnchorElement>("share-on-x").href =
         `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(location.origin + url)}`;
     }
@@ -982,15 +1262,7 @@ export default function mount() {
       // Offline launch state is already shown in place of the CTA.
       return;
     }
-    if (!builder) {
-      showError("Strategy choices are loading.");
-      return;
-    }
-    const result = builder.get();
-    if ("error" in result) {
-      showError(result.error || "Choose a valid starting strategy.");
-      return;
-    }
+
     const file = image.files?.[0] || null;
     const imageProblem = validateImage(file);
     if (imageProblem) {
@@ -998,9 +1270,12 @@ export default function mount() {
       return;
     }
     let settings: LaunchSettings;
-    try { settings = readSettings(); }
-    catch (error) {
-      showError(error instanceof Error ? error.message : "Enter valid launch settings.");
+    try {
+      settings = readSettings();
+    } catch (error) {
+      showError(
+        error instanceof Error ? error.message : "Enter valid launch settings.",
+      );
       return;
     }
     const formFields = {
@@ -1012,7 +1287,7 @@ export default function mount() {
       x: x.value,
       telegram: telegram.value,
       image: "",
-      firstStrategy: result.config,
+      firstStrategy: null,
       settings,
     };
     const validation = validateLaunchFields(formFields);
@@ -1027,8 +1302,14 @@ export default function mount() {
       config = await getJson<Config>("/api/launch-config");
       applyProtectionBudget();
       sync();
-      if (!config.launchEnabled) throw new Error("Launch connection is recovering. Please retry shortly.");
-      if (selectedProtection !== bundleLamports()) throw new Error("Protection availability changed. Review the updated amount, then continue.");
+      if (!config.launchEnabled)
+        throw new Error(
+          "Launch connection is recovering. Please retry shortly.",
+        );
+      if (selectedProtection !== bundleLamports())
+        throw new Error(
+          "Protection availability changed. Review the updated amount, then continue.",
+        );
       // Prepare a funding address without connecting or signing in a wallet.
       const uploaded = await uploadImage<UploadResult>("/api/media", file!);
       if (!uploaded.image)
@@ -1050,9 +1331,11 @@ export default function mount() {
             timeoutMs: 90_000,
           },
         );
-        if (!validLaunchStatus(amended) ||
-            amended.handle !== prepared.handle ||
-            amended.fundingWallet !== prepared.fundingWallet) {
+        if (
+          !validLaunchStatus(amended) ||
+          amended.handle !== prepared.handle ||
+          amended.fundingWallet !== prepared.fundingWallet
+        ) {
           throw new Error("Amendment did not preserve the funding address.");
         }
         pendingPayload = payload;
@@ -1122,58 +1405,20 @@ export default function mount() {
       return;
     }
 
-    const [catalogResult, configResult] = await Promise.allSettled([
-      getJson<Catalog>("/api/catalog"),
-      getJson<Config>("/api/launch-config"),
-    ]);
+    try {
+      config = await getJson<Config>("/api/launch-config");
+    } catch {
+      config = null;
+    }
     if (destroyed) return;
-    catalog =
-      catalogResult.status === "fulfilled"
-        ? catalogResult.value
-        : {
-            packs: [],
-            stocks: [],
-            packsAvailable: false,
-            stocksAvailable: false,
-            updatedAt: Date.now(),
-          };
-    config =
-      configResult.status === "fulfilled"
-        ? configResult.value
-        : null;
     generateButton.hidden = !config?.imageGeneration;
-    // Without sniper-protection capital the panel is hidden and off.
+    // Availability disables the controls without changing the chosen mode.
     applyProtectionBudget();
-    mountBuilder();
     checking = false;
     // The upstream catalogue can be unavailable without disabling burn or
     // wallet strategies. The strategy builder validates each selection.
     sync();
   }
-
-  /** A launch starts with a pack or a stock; a holder-reward launch starts with its
-   * market-making rules. Holders can vote for others later. */
-  function mountBuilder() {
-    if (!catalog) return;
-    current = null;
-    builder = createStrategyBuilder(builderRoot, {
-      catalog,
-      // Profits from the sell plan buy packs or stocks like any coin's treasury.
-      tabs: ["pack", "stock"],
-      onChange: (next) => {
-        current = next;
-        sync();
-      },
-    });
-  }
-  // The creator-fee choice is a holder-reward coin's; treasury coins have none.
-  const showFeesPanel = () => { find<HTMLElement>("creator-fees").hidden = !isOn("holder"); };
-  form.querySelector('[data-toggle-panel="holder"] [data-switch]')?.addEventListener("click", () => {
-    showFeesPanel();
-    mountBuilder();
-    sync();
-  });
-  showFeesPanel();
 
   async function refreshReadiness(quiet = false) {
     if (destroyed || checking || busy || prepared) return;
@@ -1189,11 +1434,19 @@ export default function mount() {
       // A transport failure is unknown, not proof the service is disabled.
       // Keep the last observation; submission always rechecks server readiness.
     } finally {
-      if (!destroyed) { checking = false; applyProtectionBudget(); sync(); }
+      if (!destroyed) {
+        checking = false;
+        applyProtectionBudget();
+        sync();
+      }
     }
   }
-  const onReturn = () => { if (!document.hidden) void refreshReadiness(); };
-  const onRecheck = () => { void refreshReadiness(); };
+  const onReturn = () => {
+    if (!document.hidden) void refreshReadiness();
+  };
+  const onRecheck = () => {
+    void refreshReadiness();
+  };
   recheck.addEventListener("click", onRecheck);
   const budgetTimer = setInterval(() => {
     if (!document.hidden && !launchHandle) void refreshReadiness(true);
@@ -1209,6 +1462,8 @@ export default function mount() {
   });
   return () => {
     destroyed = true;
+    stopLaunchCountdown();
+    timeMode.removeEventListener("change",timeModeChanged);
     recheck.removeEventListener("click", onRecheck);
     clearInterval(budgetTimer);
     window.removeEventListener("focus", onReturn);
@@ -1217,10 +1472,6 @@ export default function mount() {
     latestRequest++;
     stopTimers();
     if (pictureUrl) URL.revokeObjectURL(pictureUrl);
-    render(null, previewRoot);
-    render(null, builderRoot);
     render(null, find<HTMLElement>("summary-rules"));
-    render(null, find<HTMLElement>("launch-fee-split"));
-    render(null, find<HTMLElement>("launch-fee-legend"));
   };
 }

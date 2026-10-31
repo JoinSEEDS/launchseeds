@@ -1,1 +1,1 @@
-export {default} from '../../token/[id]/page.client';
+export { default } from "../../token/[id]/page.client";

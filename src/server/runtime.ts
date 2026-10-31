@@ -11,14 +11,22 @@ let instance: Store | undefined;
 let trading: Promise<SolardSource> | undefined;
 /** Signing client is separate from page read clients and created only for live actions. */
 export function getTradingSolard() {
-  if (process.env.LAUNCHSEEDS_LIVE_OPERATIONS !== "true") throw new Error("Live operations disabled");
-  return trading ??= SolardSource.createTrader(process.env.SOLANA_RPC_URL || "").catch((error) => { trading = undefined; throw error; });
+  if (process.env.LAUNCHSEEDS_LIVE_OPERATIONS !== "true")
+    throw new Error("Live operations disabled");
+  return (trading ??= SolardSource.createTrader(
+    process.env.SOLANA_RPC_URL || "",
+  ).catch((error) => {
+    trading = undefined;
+    throw error;
+  }));
 }
 export const getStore = () =>
   (instance ??= new Store(
     openLaunchseedsData(process.env.LAUNCHSEEDS_DB_PATH || "./data/launchseeds-v3.sqlite"),
   ));
-let launchPromise: Promise<{ service: LaunchService; provider: SolardLaunchProvider | null }> | undefined;
+let launchPromise:
+  | Promise<{ service: LaunchService; provider: SolardLaunchProvider | null }>
+  | undefined;
 function launchRuntime() {
   return (launchPromise ??= (async () => {
     const store = getStore();
@@ -28,10 +36,7 @@ function launchRuntime() {
       process.env.LAUNCHSEEDS_WORKER_ENABLED !== "true"
     )
       return { service: new LaunchService(store), provider: null };
-    if (
-      !process.env.SOLANA_RPC_URL ||
-      !process.env.LAUNCH_BASE_SOL
-    )
+    if (!process.env.SOLANA_RPC_URL || !process.env.LAUNCH_BASE_SOL)
       throw new Error("Launch configuration is incomplete");
     const provider = await SolardLaunchProvider.create(
       store,
@@ -56,7 +61,9 @@ let freeLaunch: FreeLaunchService | null | undefined;
 export async function getFreeLaunchService() {
   if (freeLaunch !== undefined) return freeLaunch;
   const { provider } = await launchRuntime();
-  return (freeLaunch = provider ? new FreeLaunchService(getStore(), provider) : null);
+  return (freeLaunch = provider
+    ? new FreeLaunchService(getStore(), provider)
+    : null);
 }
 
 let core: ReturnType<typeof createLaunchseedsCoreServices> | undefined;

@@ -48,10 +48,16 @@ describe("launch field preparation", () => {
     expect(payload.symbol).toBe("FAIR");
     expect(payload.name).toBe("Launchseeds");
     expect(payload.website).toBe("https://launchseeds.xyz");
-    const defaults = buildLaunchPayload({ ...fields, website: "", description: "  " });
+    const defaults = buildLaunchPayload({
+      ...fields,
+      website: "",
+      description: "  ",
+    });
     expect(defaults.website).toBe("");
     expect(defaults.description).toBe(DESCRIPTION);
-    expect(buildLaunchPayload({ ...fields, description: " Mine " }).description).toBe("Mine");
+    expect(
+      buildLaunchPayload({ ...fields, description: " Mine " }).description,
+    ).toBe("Mine");
     expect(payload.firstStrategy).toEqual({ type: "burn", amount: 25 });
     expect(Object.keys(payload).sort()).toEqual(
       [
@@ -75,14 +81,31 @@ describe("launch field preparation", () => {
 
   test("social fields are optional and accept pasted links", async () => {
     const { launchInput } = await import("../src/shared/domain");
-    for (const telegram of ["", "   ", " @launchseeds ", "https://t.me/launchseeds/", "https://t.me/+Abc_123-xyz", "https://t.me/joinchat/Abc123", "https://telegram.me/launchseeds"]) {
-      const input = { ...fields, website: "   ", x: " https://x.com/launchseeds ", telegram };
+    for (const telegram of [
+      "",
+      "   ",
+      " @launchseeds ",
+      "https://t.me/launchseeds/",
+      "https://t.me/+Abc_123-xyz",
+      "https://t.me/joinchat/Abc123",
+      "https://telegram.me/launchseeds",
+    ]) {
+      const input = {
+        ...fields,
+        website: "   ",
+        x: " https://x.com/launchseeds ",
+        telegram,
+      };
       expect(validateLaunchFields(input)).toBeNull();
       const parsed = launchInput.parse(buildLaunchPayload(input));
       expect(parsed.website).toBe("");
       expect(parsed.x).toBe("launchseeds");
     }
-    expect(launchInput.parse(buildLaunchPayload({ ...fields, website: "", x: "", telegram: "" })).telegram).toBe("");
+    expect(
+      launchInput.parse(
+        buildLaunchPayload({ ...fields, website: "", x: "", telegram: "" }),
+      ).telegram,
+    ).toBe("");
   });
 
   test("rejects invalid tickers, URLs, usernames, and dev buy precision", () => {
@@ -125,7 +148,9 @@ describe("launch field preparation", () => {
     const uid = baseline.handle;
     expect(launchUrl(uid)).toBe(`/launch?launch=${uid}`);
     // Launches created before 2026-10-25 keep their id-shaped handle.
-    expect(launchUrl("550e8400-e29b-41d4-a716-446655440000")).toBe("/launch?launch=550e8400-e29b-41d4-a716-446655440000");
+    expect(launchUrl("550e8400-e29b-41d4-a716-446655440000")).toBe(
+      "/launch?launch=550e8400-e29b-41d4-a716-446655440000",
+    );
     const mint = "HchTYRATYXki7CAKkyRGMqMuKejgVxit6YYzwMfZBmtM";
     expect(publicTokenUrl(mint)).toBe(`/coin/${mint}`);
     expect(publicTokenUrl(uid)).toBeNull();
@@ -153,7 +178,9 @@ describe("launch status presentation", () => {
     expect(validLaunchStatus({ ...baseline, receivedLamports: "20" })).toBe(
       false,
     );
-    expect(validLaunchStatus({ ...baseline, handle: "../../token" })).toBe(false);
+    expect(validLaunchStatus({ ...baseline, handle: "../../token" })).toBe(
+      false,
+    );
   });
 
   test("hides funding address while preparing", () => {
@@ -213,14 +240,20 @@ describe("image submission", () => {
     ).toContain("empty");
     expect(
       validateImage(
-        new File([new Uint8Array(5_000_001)], "huge.png", { type: "image/png" }),
+        new File([new Uint8Array(5_000_001)], "huge.png", {
+          type: "image/png",
+        }),
       ),
     ).toContain("5 MB");
   });
 
   test("accepts images above the old cap through exactly 5 MB", () => {
     for (const size of [550_001, 5_000_000]) {
-      expect(validateImage(new File([new Uint8Array(size)], "token.png", {type:"image/png"}))).toBeNull();
+      expect(
+        validateImage(
+          new File([new Uint8Array(size)], "token.png", { type: "image/png" }),
+        ),
+      ).toBeNull();
     }
   });
 

@@ -54,10 +54,19 @@ const PREPARED_PATCH = [
 
 export function tokenRepo(db: SqlDb) {
   return {
-    setSnapshot(id: number, slot: number) {
-      return patchById(db, "tokens", id, { holdersSnapshotSlot: slot }, [
-        "holdersSnapshotSlot",
-      ]);
+    setSnapshot(id: number, slot: number, observedAt?: number) {
+      return patchById(
+        db,
+        "tokens",
+        id,
+        {
+          holdersSnapshotSlot: slot,
+          ...(observedAt === undefined
+            ? {}
+            : { holdersSnapshotAt: observedAt }),
+        },
+        ["holdersSnapshotSlot", "holdersSnapshotAt"],
+      );
     },
     all() {
       return records(db, "tokens", "1=1 ORDER BY createdAt DESC");
@@ -136,15 +145,28 @@ export function tokenRepo(db: SqlDb) {
     },
     /** Set once: the wallet that paid for the launch. */
     recordLauncher(id: number, wallet: string) {
-      return db.tokens.select().where({ id, launcherWallet: { $isNull: true } }).updateAll({ launcherWallet: wallet }) > 0;
+      return (
+        db.tokens
+          .select()
+          .where({ id, launcherWallet: { $isNull: true } })
+          .updateAll({ launcherWallet: wallet }) > 0
+      );
     },
     /** Holder-reward launch: the public market-making wallet that makes the launch buy. */
     assignMarketMaker(id: number, address: string) {
-      return patchById(db, "tokens", id, { devBuyRecipient: address }, ["devBuyRecipient"]);
+      return patchById(db, "tokens", id, { devBuyRecipient: address }, [
+        "devBuyRecipient",
+      ]);
     },
     /** Holder-reward coin gone live: its market-making wallet becomes the treasury. */
-    adoptMarketMakerTreasury(id: number, patch: { rewardWallet: string; fundingWalletName: string }) {
-      return patchById(db, "tokens", id, patch, ["rewardWallet", "fundingWalletName"]);
+    adoptMarketMakerTreasury(
+      id: number,
+      patch: { rewardWallet: string; fundingWalletName: string },
+    ) {
+      return patchById(db, "tokens", id, patch, [
+        "rewardWallet",
+        "fundingWalletName",
+      ]);
     },
     /** Preparation lease, retry counters and stored launch inputs. */
     updateLaunch(id: number, patch: Partial<Token>) {
@@ -152,7 +174,15 @@ export function tokenRepo(db: SqlDb) {
     },
     /** preparing → funding once wallets, metadata and quote exist. */
     markPrepared(id: number, patch: Partial<Token>) {
-      return transition(db, "tokens", id, "preparing", "funding", patch, PREPARED_PATCH);
+      return transition(
+        db,
+        "tokens",
+        id,
+        "preparing",
+        "funding",
+        patch,
+        PREPARED_PATCH,
+      );
     },
     setGovernance(
       id: number,
@@ -168,16 +198,39 @@ export function tokenRepo(db: SqlDb) {
       ]);
     },
     /** Update only a still-unfunded launch. Must run within the caller's repo.tx. */
-    updateUnfundedDetails(id: number, patch: Pick<Token,
-      "name" | "symbol" | "description" | "image" | "website" | "x" | "telegram" |
-      "metadataUri" | "requiredLamports" | "devBuyLamports" | "launchSettingsJson" | "quoteExpiresAt"
-    >) {
+    updateUnfundedDetails(
+      id: number,
+      patch: Pick<
+        Token,
+        | "name"
+        | "symbol"
+        | "description"
+        | "image"
+        | "website"
+        | "x"
+        | "telegram"
+        | "metadataUri"
+        | "requiredLamports"
+        | "devBuyLamports"
+        | "launchSettingsJson"
+        | "quoteExpiresAt"
+      >,
+    ) {
       const t = this.get(id);
       if (!t || t.status !== "funding" || t.fundingReceivedLamports !== "0")
         throw new Error("Launch details can only change before funding");
       return patchById(db, "tokens", id, patch, [
-        "name", "symbol", "description", "image", "website", "x", "telegram",
-        "metadataUri", "requiredLamports", "devBuyLamports", "launchSettingsJson",
+        "name",
+        "symbol",
+        "description",
+        "image",
+        "website",
+        "x",
+        "telegram",
+        "metadataUri",
+        "requiredLamports",
+        "devBuyLamports",
+        "launchSettingsJson",
         "quoteExpiresAt",
       ]);
     },

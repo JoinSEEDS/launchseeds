@@ -26,8 +26,15 @@ export const launchInput = z.object({
     .trim()
     .regex(/^[A-Za-z0-9]{1,10}$/)
     .transform((value) => value.toUpperCase()),
-  description: z.string().trim().max(1000).default(""),
-  image: z.string().refine(value => /^\/api\/media\/[a-f0-9]{64}\.(png|jpg|gif|webp)$/.test(value) || /^https:\/\//.test(value), "Use an uploaded token image or HTTPS image URL"),
+  description: z.string().trim().max(4000).default(""),
+  image: z
+    .string()
+    .refine(
+      (value) =>
+        /^\/api\/media\/[a-f0-9]{64}\.(png|jpg|gif|webp)$/.test(value) ||
+        /^https:\/\//.test(value),
+      "Use an uploaded token image or HTTPS image URL",
+    ),
   website: z
     .string()
     .trim()
@@ -52,11 +59,7 @@ export const launchInput = z.object({
     .trim()
     .max(100)
     .default("")
-    .refine(
-      (v) =>
-        validTelegram(v),
-      "Enter a Telegram handle or t.me link",
-    ),
+    .refine((v) => validTelegram(v), "Enter a Telegram handle or t.me link"),
   devBuySol: z
     .string()
     .regex(/^\d+(\.\d{1,9})?$/)

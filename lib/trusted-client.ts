@@ -12,7 +12,10 @@ import { ApiError, FixedWindowLimiter } from "./api-security";
 const identities = new WeakMap<Request, string>();
 let ingressActive = false;
 
-export function bindClientIdentity(request: Request, identity: string): Request {
+export function bindClientIdentity(
+  request: Request,
+  identity: string,
+): Request {
   identities.set(request, identity);
   ingressActive = true;
   return request;

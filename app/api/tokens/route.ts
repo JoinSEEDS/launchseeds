@@ -2,11 +2,14 @@ import { apiJson } from "../../../lib/api-security";
 import { getStore } from "../../../src/server/runtime";
 import { publicRouteError } from "../../../src/server/route-errors";
 
+import { catalogRows, readCatalogInput } from "../../../src/server/launch-catalog";
+
 /** Public list of live tokens from the same store used by the page SSR. */
-export function GET(): Response {
+export function GET(request: Request = new Request("http://localhost/api/tokens")): Response {
   try {
-    const tokens = getStore()
-      .listLive()
+    const store=getStore();
+    const {rows,...pagination}=catalogRows(store,{...readCatalogInput(new URL(request.url).searchParams),filter:"live"});
+    const tokens = rows.map(row=>store.view(row))
       .map((token) => ({
         name: token.name,
         symbol: token.symbol,
@@ -16,7 +19,7 @@ export function GET(): Response {
         collectedMicros: token.collectedMicros,
         spentMicros: token.spentMicros,
       }));
-    return apiJson({ tokens });
+    return apiJson({ tokens, pagination });
   } catch (error) {
     return publicRouteError(error);
   }

@@ -1,3 +1,6 @@
+import { mountScheduledPlan } from "../../../lib/scheduled-plan-mount";
+import { mountAdminFinalize } from "../../../lib/admin-finalize";
+import { mountCoinActivity } from "../../../lib/coin-activity-mount";
 import { render } from "tradjs/client";
 import { elapsedText } from "../../../src/domain/launch-settings";
 import {
@@ -8,7 +11,10 @@ import {
 import bs58 from "bs58";
 import { sendWalletTransaction } from "../../../lib/wallet-transaction";
 import { cardClaimMessage } from "../../../lib/card-claim";
-import { closeMessage, liquidateMessage } from "../../../src/server/bundle-view";
+import {
+  closeMessage,
+  liquidateMessage,
+} from "../../../lib/bundle-message";
 import {
   createStrategyBuilder,
   StrategyLabel,
@@ -54,9 +60,13 @@ type Position = {
 type HolderSnapshot = {
   mint: string;
   symbol: string;
-  leaderboard: { holders: (Position & { heldSince: number; probability: number })[] };
+  leaderboard: {
+    holders: (Position & { heldSince: number; probability: number })[];
+  };
   /** Eligible raffle holders (LaunchSeeds's own wallets left out). */
-  raffle?: { holders: (Position & { heldSince: number; probability: number })[] };
+  raffle?: {
+    holders: (Position & { heldSince: number; probability: number })[];
+  };
 };
 
 type VoteChallenge = { nonce: string; message: string; expiresAt: number };
@@ -97,6 +107,12 @@ function errorText(error: unknown): string {
 }
 
 export default function mount() {
+  const stopAdmin = mountAdminFinalize();
+  if (document.querySelector("[data-scheduled-plan]")) {
+    const stopPlan = mountScheduledPlan();
+    const stopActivity = mountCoinActivity();
+    return () => { stopAdmin(); stopPlan?.(); stopActivity(); };
+  }
   const host = document.getElementById("governed-token");
   if (!host) return;
   // Public APIs are addressed by the token's CA.
@@ -155,16 +171,22 @@ export default function mount() {
       const until = Number(activeLock.dataset.lockUntil ?? "0");
       if (until > 0) {
         const left = Math.max(0, until - Date.now());
-        const text = left >= 3_600_000 ?
-          `${Math.ceil(left / 3_600_000)}h` :
-          `${Math.ceil(left / 60_000)}m`;
-        activeLock.textContent = left <= 0 ? "open to takeover" : activeLock.dataset.creatorLocked === "true" ?
-          `locked for ${text}` : `can change in ${text}`;
+        const text =
+          left >= 3_600_000
+            ? `${Math.ceil(left / 3_600_000)}h`
+            : `${Math.ceil(left / 60_000)}m`;
+        activeLock.textContent =
+          left <= 0
+            ? "open to takeover"
+            : activeLock.dataset.creatorLocked === "true"
+              ? `locked for ${text}`
+              : `can change in ${text}`;
       }
     }
     const since = document.getElementById("active-since");
     const started = Number(since?.dataset.activeSince ?? "0");
-    if (since && started > 0) since.textContent = `Active ${elapsedText(Date.now() - started)}`;
+    if (since && started > 0)
+      since.textContent = `Active ${elapsedText(Date.now() - started)}`;
     const deadline = board?.takeoverAt ?? null;
     const text = countdownText(deadline);
     distribution
@@ -296,7 +318,9 @@ export default function mount() {
             <tr>
               <td>
                 <span className="cell-2">
-                  <span className="mono mono--md" title={vote.wallet}>{shortWallet(vote.wallet)}</span>
+                  <span className="mono mono--md" title={vote.wallet}>
+                    {shortWallet(vote.wallet)}
+                  </span>
                   <small>
                     {formatGravity(vote.gravity)} gravity
                     {board?.totalGravity
@@ -306,7 +330,10 @@ export default function mount() {
                 </span>
               </td>
               <td>{strategyName(vote.config, catalog || undefined)}</td>
-              <td className="num dim" title={new Date(vote.votedAt).toLocaleString()}>
+              <td
+                className="num dim"
+                title={new Date(vote.votedAt).toLocaleString()}
+              >
                 {`${elapsedText(Date.now() - vote.votedAt)} ago`}
               </td>
             </tr>
@@ -325,7 +352,11 @@ export default function mount() {
 
   /** Treasury updates are independent of the voting timer and never submit payments. */
   function paintTreasury(view: TreasuryView) {
-    if (destroyed || view.mint !== mint || view.ready.observedAt < lastTreasuryAt)
+    if (
+      destroyed ||
+      view.mint !== mint ||
+      view.ready.observedAt < lastTreasuryAt
+    )
       return;
     // Do not show a price for a different strategy during a leadership switch.
     if (board && view.ready.quote.strategyKey !== strategyKey(board.active))
@@ -346,12 +377,21 @@ export default function mount() {
     // A failed/expired execution quote must not erase the published display target.
     if (result.quote.costMicros !== null) {
       needed.textContent = `of ${microsToUsd(result.quote.costMicros)}`;
-      const remaining = Math.max(0, result.quote.costMicros - result.recordedAvailableMicros);
+      const remaining = Math.max(
+        0,
+        result.quote.costMicros - result.recordedAvailableMicros,
+      );
       deficit.textContent = `${microsToUsd(remaining)} to go`;
-      const percent = result.quote.costMicros > 0 ? Math.min(100,100*result.recordedAvailableMicros/result.quote.costMicros) : 0;
-      progress.setAttribute("aria-valuenow",String(Math.floor(percent)));
-      const bar=progress.querySelector<HTMLElement>("i");
-      if(bar)bar.style.width=`${percent}%`;
+      const percent =
+        result.quote.costMicros > 0
+          ? Math.min(
+              100,
+              (100 * result.recordedAvailableMicros) / result.quote.costMicros,
+            )
+          : 0;
+      progress.setAttribute("aria-valuenow", String(Math.floor(percent)));
+      const bar = progress.querySelector<HTMLElement>("i");
+      if (bar) bar.style.width = `${percent}%`;
     }
     // Funding validation stays server-side; do not surface data-source status in the UI.
     note.textContent = "";
@@ -385,10 +425,12 @@ export default function mount() {
     const activeLock = document.getElementById("active-lock-text");
     if (activeLock && typeof current.lockUntil === "number") {
       activeLock.dataset.lockUntil = String(current.lockUntil);
-      activeLock.dataset.creatorLocked = current.creatorLockUntil !== undefined &&
+      activeLock.dataset.creatorLocked =
+        current.creatorLockUntil !== undefined &&
         current.creatorLockUntil > Date.now() &&
         strategyKey(current.active) === strategyKey(current.initial)
-        ? "true" : "false";
+          ? "true"
+          : "false";
     }
     updateCountdown();
     const allGravity = Math.max(0, current.totalGravity);
@@ -426,13 +468,18 @@ export default function mount() {
     const requestedWallet = wallet;
     const [loaded, snapshot, freshPosition] = await Promise.all([
       retrieveBoard(signal),
-      getJson<HolderSnapshot>(`/api/tokens/${encodeURIComponent(mint)}`, { signal }),
-      requestedWallet ? getJson<Position>(
-        `/api/tokens/${encodeURIComponent(mint)}/chance?wallet=${encodeURIComponent(requestedWallet)}`,
-        { signal },
-      ) : Promise.resolve(null),
+      getJson<HolderSnapshot>(`/api/tokens/${encodeURIComponent(mint)}`, {
+        signal,
+      }),
+      requestedWallet
+        ? getJson<Position>(
+            `/api/tokens/${encodeURIComponent(mint)}/chance?wallet=${encodeURIComponent(requestedWallet)}`,
+            { signal },
+          )
+        : Promise.resolve(null),
     ]);
-    if (destroyed || sequence !== generation || wallet !== requestedWallet) return;
+    if (destroyed || sequence !== generation || wallet !== requestedWallet)
+      return;
     board = loaded;
     if (freshPosition?.wallet === requestedWallet) position = freshPosition;
     paintBoard();
@@ -440,15 +487,49 @@ export default function mount() {
     const ranked = snapshot.raffle ?? snapshot.leaderboard;
     if (ledger && snapshot.mint === mint && Array.isArray(ranked?.holders)) {
       const holders = ranked.holders.slice(0, 100);
-      render(<>{holders.length ? holders.map((holder) => (
-        <tr>
-          <td><span className="cell-2"><span className="mono mono--md" title={holder.wallet}>{shortWallet(holder.wallet)}</span>
-            <small>{formatGravity(holder.balance)} ${snapshot.symbol}</small></span></td>
-          <td className="num">{holder.heldSince ? elapsedText(Date.now() - holder.heldSince) : "—"}</td>
-          <td><span className="meter"><span className="bar"><i style={{width: `${100 * holder.probability}%`}} /></span>
-            <b>{formatPercentage(100 * holder.probability)}</b></span><small data-num="">{formatGravity(holder.gravity)} gravity</small></td>
-        </tr>
-      )) : <tr><td colSpan={3} className="empty-table">No indexed eligible holders.</td></tr>}</>, ledger);
+      render(
+        <>
+          {holders.length ? (
+            holders.map((holder) => (
+              <tr>
+                <td>
+                  <span className="cell-2">
+                    <span className="mono mono--md" title={holder.wallet}>
+                      {shortWallet(holder.wallet)}
+                    </span>
+                    <small>
+                      {formatGravity(holder.balance)} ${snapshot.symbol}
+                    </small>
+                  </span>
+                </td>
+                <td className="num">
+                  {holder.heldSince
+                    ? elapsedText(Date.now() - holder.heldSince)
+                    : "—"}
+                </td>
+                <td>
+                  <span className="meter">
+                    <span className="bar">
+                      <i style={{ width: `${100 * holder.probability}%` }} />
+                    </span>
+                    <b>{formatPercentage(100 * holder.probability)}</b>
+                  </span>
+                  <small data-num="">
+                    {formatGravity(holder.gravity)} gravity
+                  </small>
+                </td>
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td colSpan={3} className="empty-table">
+                No indexed eligible holders.
+              </td>
+            </tr>
+          )}
+        </>,
+        ledger,
+      );
     }
   }
 
@@ -703,7 +784,9 @@ export default function mount() {
   const rewards = document.getElementById("ledger-rewards");
   const claimMessage = document.getElementById("claim-message");
   const onClaim = async (event: Event) => {
-    const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-claim-card]");
+    const button = (
+      event.target as HTMLElement | null
+    )?.closest<HTMLButtonElement>("[data-claim-card]");
     if (!button || button.disabled || !claimMessage) return;
     const nftMint = button.dataset.claimCard!;
     const winner = button.dataset.winner!;
@@ -711,10 +794,19 @@ export default function mount() {
     button.disabled = true;
     try {
       if (!wallet || !provider) await connectWallet();
-      if (wallet !== winner) throw new Error(`This card was won by ${winner.slice(0, 4)}…${winner.slice(-4)}. Connect that wallet to claim it.`);
-      setMessage(claimMessage, "Sign the claim in your wallet. It is free and sends nothing.");
+      if (wallet !== winner)
+        throw new Error(
+          `This card was won by ${winner.slice(0, 4)}…${winner.slice(-4)}. Connect that wallet to claim it.`,
+        );
+      setMessage(
+        claimMessage,
+        "Sign the claim in your wallet. It is free and sends nothing.",
+      );
       const issuedAt = Date.now();
-      const signed = await provider!.signMessage(new TextEncoder().encode(cardClaimMessage(nftMint, wallet, issuedAt)), "utf8");
+      const signed = await provider!.signMessage(
+        new TextEncoder().encode(cardClaimMessage(nftMint, wallet, issuedAt)),
+        "utf8",
+      );
       setMessage(claimMessage, "Sending your card…");
       const result = await postJson<{ signature: string }>(
         "/api/cards/claim",
@@ -748,34 +840,63 @@ export default function mount() {
     if (!box || !row) return;
     const owner = box.dataset.owner || "";
     // Holding (sell now) or sold with the profit still in the fund (settle).
-    const open = box.dataset.status === "holding" || box.dataset.status === "closed";
-    row.hidden = !(owner && wallet === owner && open && row.dataset.settled !== "true");
+    const open =
+      box.dataset.status === "holding" || box.dataset.status === "closed";
+    row.hidden = !(
+      owner &&
+      wallet === owner &&
+      open &&
+      row.dataset.settled !== "true"
+    );
     // The launcher may close a holding bundle.
     const close = document.getElementById("close-row");
     const launcher = box.dataset.launcher || "";
-    if (close) close.hidden = !(launcher && wallet === launcher && box.dataset.status === "holding");
+    if (close)
+      close.hidden = !(
+        launcher &&
+        wallet === launcher &&
+        box.dataset.status === "holding"
+      );
   }
   const onClose = async () => {
     const box = document.getElementById("sniper-bundle");
-    const button = document.getElementById("close-bundle") as HTMLButtonElement | null;
+    const button = document.getElementById(
+      "close-bundle",
+    ) as HTMLButtonElement | null;
     const note = document.getElementById("close-message");
     if (!box || !button || !note || button.disabled) return;
-    if (!confirm("Sell this coin's sniper-protection bundle at market now?")) return;
+    if (!confirm("Sell this coin's sniper-protection bundle at market now?"))
+      return;
     const coin = box.dataset.mint!;
     button.disabled = true;
     note.hidden = false;
     try {
-      if (!wallet || !provider) throw new Error("Connect the wallet you paid for the launch from.");
-      setMessage(note, "Sign the close in your wallet. It is free and sends nothing.");
+      if (!wallet || !provider)
+        throw new Error("Connect the wallet you paid for the launch from.");
+      setMessage(
+        note,
+        "Sign the close in your wallet. It is free and sends nothing.",
+      );
       const issuedAt = Date.now();
-      const signed = await provider.signMessage(new TextEncoder().encode(closeMessage(coin, wallet, issuedAt)), "utf8");
+      const signed = await provider.signMessage(
+        new TextEncoder().encode(closeMessage(coin, wallet, issuedAt)),
+        "utf8",
+      );
       setMessage(note, "Selling…");
       const result = await postJson<{ result: string }>(
         `/api/tokens/${encodeURIComponent(coin)}/bundle`,
-        { action: "close", wallet, issuedAt, signature: bs58.encode(signed.signature) },
+        {
+          action: "close",
+          wallet,
+          issuedAt,
+          signature: bs58.encode(signed.signature),
+        },
         { timeoutMs: 120_000 },
       );
-      setMessage(note, `Closed: ${result.result}. Reload in a minute to see the sale.`);
+      setMessage(
+        note,
+        `Closed: ${result.result}. Reload in a minute to see the sale.`,
+      );
       box.dataset.status = "exiting";
       button.hidden = true;
     } catch (error) {
@@ -788,29 +909,57 @@ export default function mount() {
   // Trade: the server quotes and simulates an unsigned Pump trade for the
   // connected wallet; the wallet signs and sends it.
   const tradePanel = document.getElementById("trade-panel");
-  const tradeGo = document.getElementById("trade-go") as HTMLButtonElement | null;
+  const tradeGo = document.getElementById(
+    "trade-go",
+  ) as HTMLButtonElement | null;
   const tradeMessage = document.getElementById("trade-message");
-  const tradeSol = document.getElementById("trade-sol") as HTMLInputElement | null;
+  const tradeSol = document.getElementById(
+    "trade-sol",
+  ) as HTMLInputElement | null;
   let side: "buy" | "sell" = "buy";
   const pressedIn = (attribute: string) =>
-    tradePanel?.querySelector<HTMLElement>(`[${attribute}][aria-pressed="true"]`)?.getAttribute(attribute) ?? "";
+    tradePanel
+      ?.querySelector<HTMLElement>(`[${attribute}][aria-pressed="true"]`)
+      ?.getAttribute(attribute) ?? "";
   function paintTrade() {
     if (!tradePanel || !tradeGo) return;
-    tradePanel.querySelectorAll<HTMLElement>("[data-side]").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.side === side)));
-    tradePanel.querySelectorAll<HTMLElement>("[data-for]").forEach((part) => (part.hidden = part.dataset.for !== side));
+    tradePanel
+      .querySelectorAll<HTMLElement>("[data-side]")
+      .forEach((tab) =>
+        tab.setAttribute("aria-selected", String(tab.dataset.side === side)),
+      );
+    tradePanel
+      .querySelectorAll<HTMLElement>("[data-for]")
+      .forEach((part) => (part.hidden = part.dataset.for !== side));
     const symbol = tradePanel.dataset.symbol ?? "";
-    tradeGo.textContent = !wallet ? "Connect Wallet" : side === "buy" ? `Buy $${symbol}` : `Sell $${symbol}`;
+    tradeGo.textContent = !wallet
+      ? "Connect Wallet"
+      : side === "buy"
+        ? `Buy $${symbol}`
+        : `Sell $${symbol}`;
     tradeGo.classList.toggle("btn--danger", !!wallet && side === "sell");
   }
   const onTradeClick = async (event: Event) => {
     const target = event.target as HTMLElement | null;
     const tab = target?.closest<HTMLElement>("[data-side]");
-    if (tab) { side = tab.dataset.side === "sell" ? "sell" : "buy"; paintTrade(); return; }
-    const chip = target?.closest<HTMLButtonElement>("[data-buy-sol],[data-sell-pct],[data-slippage]");
+    if (tab) {
+      side = tab.dataset.side === "sell" ? "sell" : "buy";
+      paintTrade();
+      return;
+    }
+    const chip = target?.closest<HTMLButtonElement>(
+      "[data-buy-sol],[data-sell-pct],[data-slippage]",
+    );
     if (chip) {
-      if (chip.dataset.buySol && tradeSol) { tradeSol.value = chip.dataset.buySol; tradeSol.focus(); return; }
+      if (chip.dataset.buySol && tradeSol) {
+        tradeSol.value = chip.dataset.buySol;
+        tradeSol.focus();
+        return;
+      }
       const group = chip.dataset.sellPct ? "data-sell-pct" : "data-slippage";
-      tradePanel!.querySelectorAll<HTMLElement>(`[${group}]`).forEach((c) => c.setAttribute("aria-pressed", String(c === chip)));
+      tradePanel!
+        .querySelectorAll<HTMLElement>(`[${group}]`)
+        .forEach((c) => c.setAttribute("aria-pressed", String(c === chip)));
     }
   };
   const onTrade = async () => {
@@ -826,23 +975,45 @@ export default function mount() {
         return;
       }
       const slippage = Number(pressedIn("data-slippage")) || 5;
-      const order = side === "buy"
-        ? { side, sol: tradeSol?.value.trim() ?? "" }
-        : { side, percent: Number(pressedIn("data-sell-pct")) || 100 };
-      if (side === "buy" && !(Number((order as { sol: string }).sol) > 0)) throw new Error("Enter an amount of SOL to buy.");
+      const order =
+        side === "buy"
+          ? { side, sol: tradeSol?.value.trim() ?? "" }
+          : { side, percent: Number(pressedIn("data-sell-pct")) || 100 };
+      if (side === "buy" && !(Number((order as { sol: string }).sol) > 0))
+        throw new Error("Enter an amount of SOL to buy.");
       setMessage(tradeMessage, "Getting a quote…");
-      const quote = await postJson<{ transaction: string; lamports: string; tokensRaw: string; limitLamports: string; decimals: number }>(
-        `/api/tokens/${encodeURIComponent(mint)}/trade`, { wallet, slippage, ...order }, { timeoutMs: 30_000 },
+      const quote = await postJson<{
+        transaction: string;
+        lamports: string;
+        tokensRaw: string;
+        limitLamports: string;
+        decimals: number;
+      }>(
+        `/api/tokens/${encodeURIComponent(mint)}/trade`,
+        { wallet, slippage, ...order },
+        { timeoutMs: 30_000 },
       );
-      const tokens = (Number(quote.tokensRaw) / 10 ** quote.decimals).toLocaleString("en-US", { maximumFractionDigits: 0 });
-      const sol = (lamports: string) => `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
-      setMessage(tradeMessage, side === "buy"
-        ? `About ${tokens} $${tradePanel?.dataset.symbol} for ${sol(quote.lamports)} (at most ${sol(quote.limitLamports)}). Confirm in your wallet.`
-        : `${tokens} $${tradePanel?.dataset.symbol} for about ${sol(quote.lamports)} (at least ${sol(quote.limitLamports)}). Confirm in your wallet.`);
+      const tokens = (
+        Number(quote.tokensRaw) /
+        10 ** quote.decimals
+      ).toLocaleString("en-US", { maximumFractionDigits: 0 });
+      const sol = (lamports: string) =>
+        `${(Number(lamports) / 1e9).toFixed(4)} SOL`;
+      setMessage(
+        tradeMessage,
+        side === "buy"
+          ? `About ${tokens} $${tradePanel?.dataset.symbol} for ${sol(quote.lamports)} (at most ${sol(quote.limitLamports)}). Confirm in your wallet.`
+          : `${tokens} $${tradePanel?.dataset.symbol} for about ${sol(quote.lamports)} (at least ${sol(quote.limitLamports)}). Confirm in your wallet.`,
+      );
       const signature = await sendWalletTransaction(quote.transaction);
       tradeMessage.replaceChildren(
         document.createTextNode(side === "buy" ? "Buy sent. " : "Sell sent. "),
-        Object.assign(document.createElement("a"), { href: `https://solscan.io/tx/${signature}`, target: "_blank", rel: "noopener noreferrer", textContent: "View transaction" }),
+        Object.assign(document.createElement("a"), {
+          href: `https://solscan.io/tx/${signature}`,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          textContent: "View transaction",
+        }),
       );
       tradeMessage.classList.remove("is-error");
     } catch (error) {
@@ -858,29 +1029,62 @@ export default function mount() {
   window.addEventListener("launchseeds:wallet-disconnected", paintTrade);
   paintTrade();
   const onLiquidate = async (event: Event) => {
-    const liquidateButton = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-liquidate]");
-    if (!sniper || !liquidateButton || !liquidateNote || liquidateButton.disabled) return;
+    const liquidateButton = (
+      event.target as HTMLElement | null
+    )?.closest<HTMLButtonElement>("[data-liquidate]");
+    if (
+      !sniper ||
+      !liquidateButton ||
+      !liquidateNote ||
+      liquidateButton.disabled
+    )
+      return;
     const coin = sniper.dataset.mint!;
     const profitTo = liquidateButton.dataset.liquidate as "owner" | "holders";
-    const target = profitTo === "owner" ? "the owner wallet" : "this coin's holders by Gravity";
-    const action = sniper.dataset.status === "holding" ? "Sell this coin's bundle at market now, sweep it back to the fund, and send its profit to" : "Send this coin's profit to";
+    const target =
+      profitTo === "owner"
+        ? "the owner wallet"
+        : "this coin's holders by Gravity";
+    const action =
+      sniper.dataset.status === "holding"
+        ? "Sell this coin's bundle at market now, sweep it back to the fund, and send its profit to"
+        : "Send this coin's profit to";
     if (!confirm(`${action} ${target}?`)) return;
     liquidateButton.disabled = true;
     liquidateNote.hidden = false;
     try {
-      if (!wallet || !provider) throw new Error("Connect the fund owner wallet first.");
-      setMessage(liquidateNote, "Sign the liquidation in your wallet. It is free and sends nothing.");
+      if (!wallet || !provider)
+        throw new Error("Connect the fund owner wallet first.");
+      setMessage(
+        liquidateNote,
+        "Sign the liquidation in your wallet. It is free and sends nothing.",
+      );
       const issuedAt = Date.now();
-      const signed = await provider.signMessage(new TextEncoder().encode(liquidateMessage(coin, wallet, issuedAt, profitTo)), "utf8");
+      const signed = await provider.signMessage(
+        new TextEncoder().encode(
+          liquidateMessage(coin, wallet, issuedAt, profitTo),
+        ),
+        "utf8",
+      );
       setMessage(liquidateNote, "Selling…");
       const result = await postJson<{ result: string }>(
         `/api/tokens/${encodeURIComponent(coin)}/bundle`,
-        { wallet, issuedAt, profitTo, signature: bs58.encode(signed.signature) },
+        {
+          wallet,
+          issuedAt,
+          profitTo,
+          signature: bs58.encode(signed.signature),
+        },
         { timeoutMs: 120_000 },
       );
-      setMessage(liquidateNote, `Liquidation: ${result.result}. The fund settles it within a few minutes; reload to see the payouts.`);
+      setMessage(
+        liquidateNote,
+        `Liquidation: ${result.result}. The fund settles it within a few minutes; reload to see the payouts.`,
+      );
       sniper.dataset.status = "exiting";
-      liquidateRowEl?.querySelectorAll<HTMLButtonElement>("[data-liquidate]").forEach((b) => (b.hidden = true));
+      liquidateRowEl
+        ?.querySelectorAll<HTMLButtonElement>("[data-liquidate]")
+        .forEach((b) => (b.hidden = true));
     } catch (error) {
       liquidateButton.disabled = false;
       setMessage(liquidateNote, errorText(error), true);
@@ -890,10 +1094,13 @@ export default function mount() {
 
   void initialize();
   return () => {
+    stopAdmin();
     destroyed = true;
     rewards?.removeEventListener("click", onClaim);
     liquidateRowEl?.removeEventListener("click", onLiquidate);
-    document.getElementById("close-bundle")?.removeEventListener("click", onClose);
+    document
+      .getElementById("close-bundle")
+      ?.removeEventListener("click", onClose);
     tradePanel?.removeEventListener("click", onTradeClick);
     tradeGo?.removeEventListener("click", onTrade);
     window.removeEventListener("launchseeds:wallet", paintTrade);

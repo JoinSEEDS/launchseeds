@@ -6,7 +6,9 @@ import { publicRouteError } from "../../../../src/server/route-errors";
 export function GET(request: Request): Response {
   try {
     const store = getStore();
-    const token = store.token(store.liveTokenId(extractPathMint(request, "/api/metadata")));
+    const token = store.token(
+      store.liveTokenId(extractPathMint(request, "/api/metadata")),
+    );
     return apiJson({
       name: token.name,
       symbol: token.symbol,

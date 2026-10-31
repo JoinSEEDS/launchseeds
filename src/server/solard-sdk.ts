@@ -110,7 +110,11 @@ export interface TraderClient {
 export async function loadSolard() {
   const packageName: string = "@solard/sdk";
   return (await import(packageName)) as {
-    createSolard(options: { rpcUrl: string; rpcUrls?: string[]; dbPath: string }): SolardClient;
+    createSolard(options: {
+      rpcUrl: string;
+      rpcUrls?: string[];
+      dbPath: string;
+    }): SolardClient;
     createTraderSolard(options: {
       rpcUrl: string;
       rpcUrls?: string[];
@@ -120,19 +124,44 @@ export async function loadSolard() {
 }
 
 export interface PumpMetadataInput {
- imagePath:string;name:string;symbol:string;description?:string;website?:string;twitter?:string;telegram?:string;
+  imagePath: string;
+  name: string;
+  symbol: string;
+  description?: string;
+  website?: string;
+  twitter?: string;
+  telegram?: string;
 }
-export type MetadataUploader = (input:PumpMetadataInput,options?:{provider?:"pump-frontend"|"pinata";fallback?:null})=>Promise<{metadataUri:string}>;
-export async function loadMetadataUploader():Promise<MetadataUploader> {
- const name:string="@solard/core";
- return ((await import(name)) as {uploadPumpMetadata:MetadataUploader}).uploadPumpMetadata;
+export type MetadataUploader = (
+  input: PumpMetadataInput,
+  options?: { provider?: "pump-frontend" | "pinata"; fallback?: null },
+) => Promise<{ metadataUri: string }>;
+export async function loadMetadataUploader(): Promise<MetadataUploader> {
+  const name: string = "@solard/core";
+  return ((await import(name)) as { uploadPumpMetadata: MetadataUploader })
+    .uploadPumpMetadata;
 }
-export type WireTransaction = { signatures: Uint8Array[]; serialize(): Uint8Array; sign(signers: Keypair[], lastValidBlockHeight?: number): Promise<void> };
+export type WireTransaction = {
+  signatures: Uint8Array[];
+  serialize(): Uint8Array;
+  sign(signers: Keypair[], lastValidBlockHeight?: number): Promise<void>;
+};
 /** Solard's wire-version-aware builder: v1 transactions hold up to 4096 bytes. */
 export async function loadWireTransaction() {
   const name: string = "@solard/core/tx/wire-transaction.ts";
   return (await import(name)) as {
-    buildV1Transaction(payer: PublicKey, draft: { instructions: TransactionInstruction[]; signers: Keypair[]; actions: never[]; trackedAccounts: never[]; cuLimit?: number }, blockhash: string, lastValidBlockHeight: number): Promise<WireTransaction>;
+    buildV1Transaction(
+      payer: PublicKey,
+      draft: {
+        instructions: TransactionInstruction[];
+        signers: Keypair[];
+        actions: never[];
+        trackedAccounts: never[];
+        cuLimit?: number;
+      },
+      blockhash: string,
+      lastValidBlockHeight: number,
+    ): Promise<WireTransaction>;
     deserializeWireTransaction(bytes: Uint8Array): { signatures: Uint8Array[] };
   };
 }

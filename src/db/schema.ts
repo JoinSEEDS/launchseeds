@@ -139,6 +139,7 @@ export const schemas = {
     marketCapUsd: z.number().finite().nonnegative().default(0),
     lastGravityMinute: Time.nullable(),
     holdersSnapshotSlot: Slot.default(0),
+    holdersSnapshotAt: Time.default(0),
     createdAt: Time,
     launchedAt: Time.nullable(),
     // Launch request (merged): creator capability hash, idempotent input, preparation lease.
@@ -382,7 +383,12 @@ export const schemas = {
     status: z.enum(["committed", "drawn", "sending", "sent", "needs_review"]),
     signedTransaction: z.string().nullable().default(null),
     signature: z.string().nullable().default(null),
-    lastValidBlockHeight: z.number().int().nonnegative().nullable().default(null),
+    lastValidBlockHeight: z
+      .number()
+      .int()
+      .nonnegative()
+      .nullable()
+      .default(null),
     error: z.string().nullable().default(null),
     nextAttemptAt: Time.default(0),
     createdAt: Time,
@@ -408,7 +414,10 @@ export const schemas = {
     signature: z.string().nullable().default(null),
     positionAfterRaw: Atomic.default("0"),
     costAfterLamports: Atomic.default("0"),
-    realizedAfterLamports: z.string().regex(/^-?\d+$/).default("0"),
+    realizedAfterLamports: z
+      .string()
+      .regex(/^-?\d+$/)
+      .default("0"),
     error: z.string().nullable().default(null),
     createdAt: Time,
     confirmedAt: Time.nullable().default(null),
@@ -418,15 +427,37 @@ export const schemas = {
    * each gets 110% of its buy, or at market when the capital is needed for a
    * new launch; then their accounts are closed and swept back to the capital
    * wallet. Amounts are lamports / raw tokens. */
+  scheduledPlans: z.object({
+    tokenId: RowId,
+    buyersJson: z.string(),
+    planHash: z.string(),
+    createdAt: Time,
+  }),
   launchBundles: z.object({
     tokenId: RowId,
-    status: z.enum(["buying", "holding", "exiting", "exited", "closed", "settling", "settled", "abandoned"]),
+    status: z.enum([
+      "buying",
+      "holding",
+      "exiting",
+      "exited",
+      "closed",
+      "settling",
+      "settled",
+      "abandoned",
+    ]),
     /** What the fund sent to the bundle wallets (buys + reserves): its principal. */
     costLamports: Atomic.default("0"),
     /** Chosen by the owner at liquidation: where this coin's realized profit goes. */
     /** token: the profit bought the coin back for a $TOKEN holder (bundleRewards). */
-    settlement: z.enum(["owner", "holders", "token"]).nullable().default(null),
-    profitLamports: z.string().regex(/^-?\d+$/).nullable().default(null),
+    settlement: z
+      .enum(["owner", "holders", "token", "wallet", "burn"])
+      .nullable()
+      .default(null),
+    profitLamports: z
+      .string()
+      .regex(/^-?\d+$/)
+      .nullable()
+      .default(null),
     settledAt: Time.nullable().default(null),
     /** Run by the launch CLI on another wallet store: shown here, never traded here. */
     external: z.boolean().default(false),
@@ -444,7 +475,10 @@ export const schemas = {
     exitLastValidBlockHeight: z.number().int().nullable().default(null),
     /** profit: reached its target; rotation: capital was needed; deadline: the
      * launcher's hold limit; close: the launcher closed it. */
-    exitKind: z.enum(["profit", "rotation", "deadline", "close"]).nullable().default(null),
+    exitKind: z
+      .enum(["profit", "rotation", "deadline", "close"])
+      .nullable()
+      .default(null),
     proceedsLamports: Atomic.nullable().default(null),
     sweepTransaction: z.string().nullable().default(null),
     sweepSignature: z.string().nullable().default(null),
@@ -466,9 +500,25 @@ export const schemas = {
   /** A sold bundle's profit, spent buying the coin back in steps from the
    * capital wallet; everything bought goes to one $TOKEN holder, drawn with a
    * chance proportional to Gravity (snapshot committed before the blockhash). */
+  rewardApprovals: z.object({
+    rewardId: RowId,
+    payloadHash: z.string().regex(/^[a-f0-9]{64}$/),
+    wallet: Address,
+    signature: Id,
+    issuedAt: Time,
+    createdAt: Time,
+  }),
   bundleRewards: z.object({
     tokenId: RowId,
-    status: z.enum(["buying", "committed", "drawn", "sending", "sent", "skipped", "needs_review"]),
+    status: z.enum([
+      "buying",
+      "committed",
+      "drawn",
+      "sending",
+      "sent",
+      "skipped",
+      "needs_review",
+    ]),
     profitLamports: Atomic,
     steps: z.number().int().min(1),
     stepMs: Time,

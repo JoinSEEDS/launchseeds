@@ -7,7 +7,9 @@ import {
   ApiError,
   apiJson,
   readBoundedJson,
-  requireSameOrigin, LAUNCH_HANDLE } from "../../../lib/api-security";
+  requireSameOrigin,
+  LAUNCH_HANDLE,
+} from "../../../lib/api-security";
 import { getLaunchService } from "../../../src/server/runtime";
 import { getOperationalLaunchReadiness } from "../../../src/server/launch-health";
 import { publicRouteError } from "../../../src/server/route-errors";
@@ -15,7 +17,6 @@ import { IngressRateLimiter } from "../../../lib/trusted-client";
 
 const limiter = new IngressRateLimiter("launch-payment", 10, 60_000);
 const walletPattern = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-
 
 /**
  * Generate an unsigned SOL funding transfer, bound to one launch and payer.
@@ -58,7 +59,8 @@ export async function POST(request: Request): Promise<Response> {
     const endpoint = process.env.SOLANA_RPC_URL;
     if (!endpoint)
       throw new ApiError("Launch payment is temporarily unavailable.", 503);
-    const { createRpcConnection } = await import("../../../src/server/rpc-pacing");
+    const { createRpcConnection } =
+      await import("../../../src/server/rpc-pacing");
     const connection = createRpcConnection(endpoint, "confirmed");
     const { blockhash, lastValidBlockHeight } =
       await connection.getLatestBlockhash("confirmed");

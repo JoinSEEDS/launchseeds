@@ -19,7 +19,8 @@ export async function sendWalletTransaction(
   const result = (await provider.signAndSendTransaction(
     Transaction.from(bytes),
   )) as { signature?: unknown } | string | undefined;
-  const signature = typeof result === "string" ? result : String(result?.signature ?? "");
+  const signature =
+    typeof result === "string" ? result : String(result?.signature ?? "");
   if (!signature) throw new Error("The wallet did not return a signature.");
   return signature;
 }

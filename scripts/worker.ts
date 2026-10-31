@@ -17,8 +17,8 @@ import { SolardSource, SolardLaunchProvider } from "../src/server/solard";
 import type { TradeListener } from "../src/server/solard-sdk";
 import { LaunchService } from "../src/server/launch";
 import { runCycle } from "../src/server/worker";
-import {runLaunchCycle,startLaunchLoop} from "../src/server/launch-loop";
-import {watchLaunchWake} from "../src/server/launch-wake";
+import { runLaunchCycle, startLaunchLoop } from "../src/server/launch-loop";
+import { watchLaunchWake } from "../src/server/launch-wake";
 import { getWorkerHealth } from "../src/server/launch-health";
 import { feeClaimsEnabled } from "../src/server/fee-claimer";
 import { createFeeClaimer } from "../src/server/fee-claimer-runtime";
@@ -44,9 +44,17 @@ const lock = await acquireLockWhenFree(lockPath);
 async function acquireLockWhenFree(path: string, waitMs = 120_000) {
   const until = Date.now() + waitMs;
   for (;;) {
-    try { return acquireLock(path); }
-    catch (error) {
-      if (!(error instanceof Error && error.message.startsWith("Another LaunchSeeds worker")) || Date.now() >= until) throw error;
+    try {
+      return acquireLock(path);
+    } catch (error) {
+      if (
+        !(
+          error instanceof Error &&
+          error.message.startsWith("Another LaunchSeeds worker")
+        ) ||
+        Date.now() >= until
+      )
+        throw error;
       await Bun.sleep(1_000);
     }
   }
@@ -89,7 +97,7 @@ let rewardsSource: SolardSource | undefined;
 let launchProvider: SolardLaunchProvider | undefined;
 let fastLaunch: ReturnType<typeof startLaunchLoop> | undefined;
 let budgetRefresh: Promise<void> | undefined;
-let closeLaunchWake: (()=>void) | undefined;
+let closeLaunchWake: (() => void) | undefined;
 try {
   source = await SolardSource.create(rpcUrl);
   let launch: LaunchService | undefined;
@@ -119,17 +127,31 @@ try {
   };
   const mints = () => store.listLive().map((token) => token.mint);
   // Off unless [launchseeds] fee_claims = true (and live operations are on).
-  rewardsSource = feeClaimsEnabled() || packExecutionsEnabled() || stockExecutionsEnabled() || marketMakingEnabled() ? await SolardSource.createTrader(rpcUrl) : undefined;
-  const fees = feeClaimsEnabled() ? createFeeClaimer(store, rewardsSource!) : undefined;
+  rewardsSource =
+    feeClaimsEnabled() ||
+    packExecutionsEnabled() ||
+    stockExecutionsEnabled() ||
+    marketMakingEnabled()
+      ? await SolardSource.createTrader(rpcUrl)
+      : undefined;
+  const fees = feeClaimsEnabled()
+    ? createFeeClaimer(store, rewardsSource!)
+    : undefined;
   if (fees) console.log("Fee claims enabled");
   // Off unless [launchseeds] pack_executions = true: buys and opens packs with treasury funds.
-  const packs = packExecutionsEnabled() ? createPackExecutor(store, rewardsSource!, rpcUrl) : undefined;
+  const packs = packExecutionsEnabled()
+    ? createPackExecutor(store, rewardsSource!, rpcUrl)
+    : undefined;
   if (packs) console.log("Pack executions enabled");
   // Off unless [launchseeds] stock_executions = true: buys stock (e.g. GLDx) and sends wins.
-  const stocks = stockExecutionsEnabled() ? createStockExecutor(store, rewardsSource!, rpcUrl) : undefined;
+  const stocks = stockExecutionsEnabled()
+    ? createStockExecutor(store, rewardsSource!, rpcUrl)
+    : undefined;
   if (stocks) console.log("Stock executions enabled");
   // Off unless [launchseeds] market_making = true: trades holder-reward coins' market-making wallets.
-  const market = marketMakingEnabled() ? createMarketMaker(store, rewardsSource!, rpcUrl) : undefined;
+  const market = marketMakingEnabled()
+    ? createMarketMaker(store, rewardsSource!, rpcUrl)
+    : undefined;
   if (market) console.log("Market making enabled");
   const once = process.argv.includes("--once");
   // Trade events only speed up holder refreshes; the minute cycle still syncs
@@ -161,27 +183,51 @@ try {
     const service = launch;
     let lastBudgetRefresh = 0;
     const refreshBudget = () => {
-      if (!launchProvider?.bundles || budgetRefresh || Date.now() - lastBudgetRefresh < 5_000) return;
+      if (
+        !launchProvider?.bundles ||
+        budgetRefresh ||
+        Date.now() - lastBudgetRefresh < 5_000
+      )
+        return;
       lastBudgetRefresh = Date.now();
-      budgetRefresh = launchProvider.refreshProtectionBudget().catch(() => {
-        console.warn("Protection budget refresh unavailable; normal launches remain available");
-      }).finally(() => { budgetRefresh = undefined; });
+      budgetRefresh = launchProvider
+        .refreshProtectionBudget()
+        .catch(() => {
+          console.warn(
+            "Protection budget refresh unavailable; normal launches remain available",
+          );
+        })
+        .finally(() => {
+          budgetRefresh = undefined;
+        });
     };
     refreshBudget();
     fastLaunch = startLaunchLoop({
       cycle: async () => {
-        const result = await runLaunchCycle({store,launch:service,bundles:launchProvider?.bundles??undefined});
+        const result = await runLaunchCycle({
+          store,
+          launch: service,
+          bundles: launchProvider?.bundles ?? undefined,
+        });
         refreshBudget();
         return result;
       },
-      onStart: () => { health.startCycle(workerId); },
-      onFinish: result => {
-        health.finishCycle(workerId,result.errors.length===0,result.errors.map(e=>e.operation).join(","));
-        if(result.errors.length)console.error(JSON.stringify(result.errors));
+      onStart: () => {
+        health.startCycle(workerId);
       },
-      onError: () => { health.finishCycle(workerId,false,"launch cycle"); },
+      onFinish: (result) => {
+        health.finishCycle(
+          workerId,
+          result.errors.length === 0,
+          result.errors.map((e) => e.operation).join(","),
+        );
+        if (result.errors.length) console.error(JSON.stringify(result.errors));
+      },
+      onError: () => {
+        health.finishCycle(workerId, false, "launch cycle");
+      },
     });
-    closeLaunchWake=watchLaunchWake(fastLaunch.wake);
+    closeLaunchWake = watchLaunchWake(fastLaunch.wake);
   }
   if (!once) await syncListener();
   process.on("SIGINT", () => {
@@ -200,21 +246,29 @@ try {
       packs,
       stocks,
       market,
-      bundles: fastLaunch ? undefined : launchProvider?.bundles ?? undefined,
+      bundles: fastLaunch ? undefined : (launchProvider?.bundles ?? undefined),
     });
-    if (!fastLaunch) health.finishCycle(
-      workerId,
-      Boolean(launch) && result.errors.length === 0,
-      result.errors
-        .map((item) => item.operation)
-        .slice(0, 5)
-        .join(","),
-    );
+    if (!fastLaunch)
+      health.finishCycle(
+        workerId,
+        Boolean(launch) && result.errors.length === 0,
+        result.errors
+          .map((item) => item.operation)
+          .slice(0, 5)
+          .join(","),
+      );
     if (result.errors.length) console.error(JSON.stringify(result.errors));
     if (!once) await syncListener();
     // Read-only page observations are produced here, never during SSR.
-    try { await refreshHomeSnapshot(store); await refreshSiteSnapshots(); }
-    catch (error) { console.error("Home observation refresh failed", error instanceof Error ? error.message : "Unknown error"); }
+    try {
+      await refreshHomeSnapshot(store);
+      await refreshSiteSnapshots();
+    } catch (error) {
+      console.error(
+        "Home observation refresh failed",
+        error instanceof Error ? error.message : "Unknown error",
+      );
+    }
     if (once) {
       if (result.errors.length) process.exitCode = 1;
       break;

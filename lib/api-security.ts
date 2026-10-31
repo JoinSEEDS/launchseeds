@@ -1,3 +1,5 @@
+import { expectedRequestOrigin } from "./site-brand";
+
 /** Transport boundaries for all anonymous public API endpoints. */
 export class ApiError extends Error {
   constructor(
@@ -27,9 +29,7 @@ export function requireSameOrigin(request: Request): void {
   // the internal request URL may legitimately use http://localhost.
   const publicBase =
     typeof process !== "undefined" ? process.env.PUBLIC_BASE_URL : undefined;
-  const expected = publicBase
-    ? new URL(publicBase).origin
-    : new URL(request.url).origin;
+  const expected = expectedRequestOrigin(request, publicBase);
   const origin = request.headers.get("origin");
   if (!origin || origin !== expected) {
     throw new ApiError("Origin not allowed.", 403);
@@ -183,7 +183,8 @@ export function extractPathId(request: Request, prefix: string): string {
 }
 
 /** Private launch-status handle: sha256(CA) prefix, or a pre-2026-10-25 launch id. */
-export const LAUNCH_HANDLE = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+export const LAUNCH_HANDLE =
+  /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 export function extractPathHandle(request: Request, prefix: string): string {
   const pathname = new URL(request.url).pathname;
   if (!pathname.startsWith(`${prefix}/`)) throw new ApiError("Not found.", 404);
@@ -193,12 +194,20 @@ export function extractPathHandle(request: Request, prefix: string): string {
 }
 
 /** Public token routes are addressed by CA (base58 mint), never internal ids. */
-export function extractPathMint(request: Request, prefix: string, suffix = ""): string {
+export function extractPathMint(
+  request: Request,
+  prefix: string,
+  suffix = "",
+): string {
   const pathname = new URL(request.url).pathname;
   if (!pathname.startsWith(`${prefix}/`) || !pathname.endsWith(suffix))
     throw new ApiError("Not found.", 404);
-  const mint = pathname.slice(prefix.length + 1, pathname.length - suffix.length);
-  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) throw new ApiError("Not found.", 404);
+  const mint = pathname.slice(
+    prefix.length + 1,
+    pathname.length - suffix.length,
+  );
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint))
+    throw new ApiError("Not found.", 404);
   return mint;
 }
 

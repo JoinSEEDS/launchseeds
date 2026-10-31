@@ -27,7 +27,10 @@ export function openDatabase(path = "./data/launchseeds-v3.sqlite") {
         if (
           identity?.type !== "INTEGER" ||
           identity.pk !== 1 ||
-          Object.entries(schema.shape).some(([key, field]) => !names.has(key) && !field.safeParse(undefined).success) ||
+          Object.entries(schema.shape).some(
+            ([key, field]) =>
+              !names.has(key) && !field.safeParse(undefined).success,
+          ) ||
           cols.some(
             (x) => !known.has(x.name) && x.notnull && x.dflt_value == null,
           )

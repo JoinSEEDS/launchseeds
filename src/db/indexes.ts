@@ -2,6 +2,11 @@
  * the ORM's automatic additive migrations do not replace business uniqueness constraints.
  */
 export const INDEXES = [
+  "CREATE UNIQUE INDEX IF NOT EXISTS user_batch_runs_token_batch ON userBatchRuns(tokenId,batchIndex)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS coin_liquidations_token ON coinLiquidations(tokenId)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS user_batch_attempt_signature ON userBatchAttempts(batchRunId,kind,signature)",
+  "CREATE INDEX IF NOT EXISTS tokens_catalog_order ON tokens(createdAt DESC,id DESC)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS rewardApprovals_reward ON rewardApprovals(rewardId)",
   "CREATE UNIQUE INDEX IF NOT EXISTS governanceState_token ON governanceState(tokenId)",
   "CREATE UNIQUE INDEX IF NOT EXISTS voteChallenges_challenge ON voteChallenges(challenge)",
   "CREATE INDEX IF NOT EXISTS voteChallenges_expiry ON voteChallenges(expiresAt)",
@@ -21,10 +26,10 @@ export const INDEXES = [
   "CREATE UNIQUE INDEX IF NOT EXISTS deposits_signature ON deposits(signature)",
   "CREATE UNIQUE INDEX IF NOT EXISTS free_launches_token ON freeLaunches(tokenId)",
   "CREATE INDEX IF NOT EXISTS free_launches_identity ON freeLaunches(identity, createdAt)",
-    "DROP INDEX IF EXISTS draws_token_number",
-    "CREATE UNIQUE INDEX IF NOT EXISTS draws_active_token_number ON draws(tokenId, number) WHERE supersededAt = 0",
-    "DROP INDEX IF EXISTS draws_execution",
-    "CREATE UNIQUE INDEX IF NOT EXISTS draws_active_execution ON draws(executionId) WHERE executionId IS NOT NULL AND supersededAt = 0",
+  "DROP INDEX IF EXISTS draws_token_number",
+  "CREATE UNIQUE INDEX IF NOT EXISTS draws_active_token_number ON draws(tokenId, number) WHERE supersededAt = 0",
+  "DROP INDEX IF EXISTS draws_execution",
+  "CREATE UNIQUE INDEX IF NOT EXISTS draws_active_execution ON draws(executionId) WHERE executionId IS NOT NULL AND supersededAt = 0",
   "CREATE UNIQUE INDEX IF NOT EXISTS stock_wins_token_number ON stockWins(tokenId, number)",
   "CREATE INDEX IF NOT EXISTS stock_wins_open ON stockWins(tokenId, status)",
   "CREATE UNIQUE INDEX IF NOT EXISTS mm_trades_intent ON mmTrades(intentKey)",
@@ -36,7 +41,7 @@ export const INDEXES = [
   "CREATE INDEX IF NOT EXISTS bundle_rewards_status ON bundleRewards(status)",
   "CREATE UNIQUE INDEX IF NOT EXISTS site_votes_wallet ON siteVotes(site, wallet)",
   "CREATE INDEX IF NOT EXISTS site_messages_site ON siteMessages(site, kind, at)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS draw_revision_pending ON drawRevisions(executionId) WHERE completedAt = 0",
+  "CREATE UNIQUE INDEX IF NOT EXISTS draw_revision_pending ON drawRevisions(executionId) WHERE completedAt = 0",
   "CREATE INDEX IF NOT EXISTS deposits_token ON deposits(tokenId)",
   "CREATE UNIQUE INDEX IF NOT EXISTS holders_identity ON holders(tokenId, wallet)",
   "CREATE INDEX IF NOT EXISTS holders_gravity ON holders(tokenId, length(gravityMicros) DESC, gravityMicros DESC) WHERE excluded = 0",
@@ -67,4 +72,5 @@ export const INDEXES = [
   "CREATE INDEX IF NOT EXISTS tokenBuybacks_due ON tokenBuybacks(status, nextAttemptAt)",
   "CREATE UNIQUE INDEX IF NOT EXISTS tokenBuybacks_request ON tokenBuybacks(requestKey) WHERE requestKey IS NOT NULL",
   "CREATE UNIQUE INDEX IF NOT EXISTS publicPageSnapshots_key ON publicPageSnapshots(key)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS scheduledPlans_token ON scheduledPlans(tokenId)",
 ] as const;

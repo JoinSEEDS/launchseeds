@@ -1,325 +1,121 @@
-import { storedHomeObservations } from "../src/server/home-snapshot";
 import { getStore } from "../src/server/runtime";
-import { presentConfig } from "../lib/governance";
-import { strategyName } from "../lib/strategy";
-import { displayStrategyCostMicros, holderFeesMicros } from "../lib/reward-funding";
-import { storedLaunchSettings } from "../src/domain/launch-settings";
-import { initials } from "../lib/format";
-
-export default function HomePage() { return renderHomePage(getStore()); }
-
-export function renderHomePage(store: ReturnType<typeof getStore>) {
-  const tokens = store.listLive();
-  const { catalog, tokenCap, capPairs } = storedHomeObservations(store);
-  const items = tokens.map((token) => {
-    const raw = store.repo.tokens.get(token.id);
-    const strategy = raw?.activeStrategyId ? store.repo.strategies.get(raw.activeStrategyId) : null;
-    const active = strategy ? presentConfig(strategy.configJson) : undefined;
-    const board = active ? { active, switchedAt: store.repo.operations.state(token.id)?.switchedAt ?? 0 } : null;
-    const holderRewards = storedLaunchSettings(raw?.launchSettingsJson).holderRewards;
-    const cost = active && !holderRewards ? displayStrategyCostMicros(active, catalog, active.type === "pack" ? store.repo.packs.get(active.ref)?.priceUsdCents : undefined) : null;
-    const fees = capPairs.find(row => row.id === token.id)?.fees ?? null;
-    const claimed = Math.max(
-      0,
-      token.collectedMicros - token.spentMicros - token.reservedMicros,
-    );
-    const available = claimed + (holderRewards ? 0 : holderFeesMicros(fees ?? 0, raw?.launchSettingsJson ?? ""));
-    const progress =
-      cost && cost > 0 ? Math.min(100, (100 * available) / cost) : 0;
-    return {
-      token,
-      board,
-      active,
-      cost,
-      available,
-      claimed,
-      fundingKnown: fees !== null || claimed > 0,
-      progress,
-      holderRewards,
-      holders: store.leaderboard(token.id).holders.length,
-    };
-  });
-  const marketCaps = new Map(capPairs.map((row) => [row.id, row.cap]));
-  // Recorded treasury credit plus creator fees still unclaimed in on-chain vaults.
-  const sum =
-    items.reduce((n, row) => n + row.claimed, 0) +
-    capPairs.reduce((n, row) => n + (row.fees ?? 0), 0);
-  const sumKnown = items.some(row => row.claimed > 0) || capPairs.some(row => row.fees !== null);
-  const best = items
-    .filter((row) => !row.holderRewards && row.cost !== null && row.fundingKnown)
-    .sort((a, b) => b.progress - a.progress)[0];
+import { launchCatalog, catalogOverview, readCatalogInput, type CatalogInput } from "../src/server/launch-catalog";
+import { currentRequestUrl } from "../src/server/site-brand";
+import { catalogHref, type CatalogFilter } from "../lib/catalog-pagination";
+import { CatalogNavigation } from "./components/catalog-navigation";
+import { TokenCards } from "./components/token-cards";
+export default function HomePage() {
+  return renderHomePage(getStore(),readCatalogInput(new URL(currentRequestUrl() ?? "http://localhost/").searchParams));
+}
+export function renderHomePage(store: ReturnType<typeof getStore>, input?: CatalogInput) {
+  const page=launchCatalog(store,input), overview=catalogOverview(store), cards=page.items, next=overview.next;
   return (
-    <main className="page">
-      <div className="page-head">
+    <main className="page launchpad-page">
+      <section className="launchpad-hero">
         <div>
-          <h1 className="page-title">Tokens governed by their holders</h1>
-          <p className="page-lede">
-            Explore holder-governed tokens and their treasuries. Holders can
-            vote on strategies including cards, tokenized stocks, buybacks and
-            wallet rewards.
+          <span className="eyebrow">PUBLIC PLANS. VISIBLE EXECUTION.</span>
+          <h1>
+            Know the plan.
+            <br />
+            <span>Before the launch.</span>
+          </h1>
+          <p>
+            Scheduled launches with public protection wallets, fixed sell
+            targets and a profit destination chosen in advance.
           </p>
+          <a className="btn btn--primary" href="/launch">
+            Schedule a launch <span aria-hidden="true">&#8599;</span>
+          </a>
         </div>
-      </div>
-      <div className="grid-3">
-        <section className="panel">
-          <div className="panel__head">
-            <span className="label">Paid to holders (24h)</span>
-          </div>
-          <div className="kv">
+        <aside className="hero-next">
+          <span className="label">Upcoming funded launch</span>
+          {next ? (
+            <>
+              <h2>${next.symbol}</h2>
+              <time>
+                {new Date(next.scheduledAt)
+                  .toISOString()
+                  .replace("T", " ")
+                  .replace(".000Z", " UTC")}
+              </time>
+              <a href={`/coin/${next.mint ?? next.planHash}`}>
+                Inspect the plan &#8594;
+              </a>
+            </>
+          ) : (
+            <>
+              <h2>
+                The next slot
+                <br />
+                is yours.
+              </h2>
+              <p>
+                Choose the time. Publish the allocation. Follow every
+                transaction.
+              </p>
+            </>
+          )}
+          <dl>
             <div>
-              <div className="label label--sm">Paid out</div>
-              <div className="kv__value">$0.00</div>
+              <dt>Live tokens</dt>
+              <dd>{overview.live}</dd>
             </div>
-            <div className="kv__item--end">
-              <div className="label label--sm">Rewards</div>
-              <div className="kv__value">0</div>
-            </div>
-          </div>
-        </section>
-        <section className="panel">
-          <div className="panel__head">
-            <span className="label">Waiting to pay out</span>
-          </div>
-          <div className="kv">
             <div>
-              <div className="label label--sm">Fees accumulated</div>
-              <div className="kv__value" data-num="">{sumKnown ? `$${(sum / 1e6).toFixed(2)}` : "—"}</div>
+              <dt>Scheduled plans</dt>
+              <dd>{overview.scheduled}</dd>
             </div>
-            <div className="kv__item--end">
-              <div className="label label--sm">Live treasuries</div>
-              <div className="kv__value">{items.length}</div>
-            </div>
-          </div>
-          <a
-            className="panel__foot"
-            href={
-              best ? `/coin/${encodeURIComponent(best.token.mint ?? "")}` : "/launch"
-            }
-          >
-            <span>
-              {best
-                ? `$${best.token.symbol} · ${strategyName(best.active!, catalog || undefined)}`
-                : "Launch a token"}
-            </span>
-            <b>{best ? `${Math.round(best.progress)}%` : "Launch Token"}</b>
-          </a>
-        </section>
-        <section className="panel">
-          <div className="panel__head">
-            <a className="label" href="/token">
-              $TOKEN
-            </a>
-          </div>
-          <div className="kv">
-            <div>
-              <div className="label label--sm">Market cap</div>
-              <div className="kv__value">
-                {tokenCap === null ? "Not available" : tokenCap}
-              </div>
-            </div>
-            <div className="kv__item--end">
-              <div className="label label--sm">Burned</div>
-              <div className="kv__value">0</div>
-            </div>
-          </div>
-          <a className="panel__foot" href="/token">
-            <span>Buyback & burn</span>
-            <b>View</b>
-          </a>
-        </section>
-      </div>
-      <div className="split">
-        <aside className="split__side">
-          <section className="panel panel__body--roomy">
-            <h2 className="how-title">How it works</h2>
-            <ol className="how">
-              <li>Launch a token and choose what its fees do first.</li>
-              <li>Trading fees fill the token's treasury.</li>
-              <li>
-                Holders vote any time. The leading strategy becomes active after
-                3 minutes.
-              </li>
-            </ol>
-            <a className="btn btn--primary btn--block" href="/launch">
-              Launch Token
-            </a>
-          </section>
+          </dl>
         </aside>
-        <section className="split__main" aria-labelledby="tokens-title">
-          <h2 className="section-title" id="tokens-title">
-            Tokens
-          </h2>
-          <div className="ledger-bar">
-            <div className="tabs" role="tablist" aria-label="Token filters">
-              <button
+      </section>
+      <section className="launchpad-catalog" aria-labelledby="tokens-title">
+        <div className="launchpad-toolbar">
+          <h2 id="tokens-title">Launches</h2>
+          <div className="tabs" role="tablist" aria-label="Launch filters">
+            {["All", "Scheduled", "Live"].map((label, i) => (
+              <a
+                href={catalogHref({filter:label.toLowerCase() as CatalogFilter,q:page.q})}
                 className="tab"
                 role="tab"
-                aria-selected="true"
-                type="button"
+                data-card-filter={label.toLowerCase()}
+                aria-selected={String(label.toLowerCase() === page.filter)}
               >
-                Next reward
-              </button>
-              <button
-                className="tab"
-                role="tab"
-                aria-selected="false"
-                type="button"
-              >
-                Recently switched
-              </button>
-              <button
-                className="tab"
-                role="tab"
-                aria-selected="false"
-                type="button"
-              >
-                New
-              </button>
-            </div>
-            <label className="search">
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="#8b94a3"
-                strokeWidth={2.4}
-                strokeLinecap="round"
-                aria-hidden="true"
-              >
-                <circle cx="11" cy="11" r="7"></circle>
-                <path d="M20 20l-3.5-3.5"></path>
-              </svg>
-              <span className="sr-only">Search tokens</span>
-              <input
-                type="search"
-                placeholder="Search ticker or CA"
-                data-filter="#token-table"
-              />
-            </label>
+                {label}
+              </a>
+            ))}
           </div>
-          <div className="table-wrap">
-            <table className="table" id="token-table">
-              <thead>
-                <tr>
-                  <th scope="col">Token</th>
-                  <th scope="col">Active strategy</th>
-                  <th scope="col">
-                    {items.length ? "Next reward ↓" : "Next reward"}
-                  </th>
-                  <th scope="col" className="num">
-                    Mcap
-                  </th>
-                  <th scope="col" className="num">
-                    Holders
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.length ? (
-                  items.map(
-                    ({
-                      token,
-                      board,
-                      active,
-                      cost,
-                      available,
-                      progress,
-                      holders,
-                      holderRewards,
-                      fundingKnown,
-                    }) => (
-                      <tr
-                        className="is-link"
-                        data-href={`/coin/${encodeURIComponent(token.mint ?? "")}`}
-                        data-progress={String(progress)}
-                        data-created={String(token.createdAt)}
-                        data-switched={String(board?.switchedAt || 0)}
-                        data-search={`${token.name} ${token.symbol} ${token.mint}`.toLowerCase()}
-                      >
-                        <td>
-                          <a
-                            className="token"
-                            href={`/coin/${encodeURIComponent(token.mint ?? "")}`}
-                          >
-                            <span
-                              className="av"
-                              style={{ background: "#2e3b78" }}
-                            >
-                              {token.image ? (
-                                <img
-                                  className="avatar-image"
-                                  src={token.image}
-                                  alt=""
-                                />
-                              ) : (
-                                initials(token.name)
-                              )}
-                            </span>
-                            <span>
-                              <span className="token__name">
-                                ${token.symbol}
-                              </span>
-                              <span className="token__sub">{token.name}</span>
-                            </span>
-                          </a>
-                        </td>
-                        <td>
-                          <span className="strategy-inline">
-                            {holderRewards ? "Holder rewards" : active
-                              ? strategyName(active, catalog || undefined)
-                              : "—"}
-                          </span>
-                        </td>
-                        <td>
-                          {holderRewards ? <span className="dim">Fees paid in SOL by Pump</span> : <>
-                          <span className="meter">
-                            <span className="bar">
-                              <i style={{ width: `${progress}%` }} />
-                            </span>
-                            <b>
-                              {cost === null || !fundingKnown ? "—" : `${Math.round(progress)}%`}
-                            </b>
-                          </span>
-                          <span
-                            className="dim"
-                            style={{
-                              display: "block",
-                              fontSize: "11px",
-                              marginTop: "3px",
-                            }}
-                          >
-                            {cost === null || !fundingKnown
-                              ? "—"
-                              : `Funded $${(available / 1e6).toFixed(2)} · Reward $${(cost / 1e6).toFixed(2)}`}
-                          </span>
-                          {cost !== null && fundingKnown && available > cost ? <span className="dim" style={{ display: "block", fontSize: "11px" }}>Surplus ${((available - cost) / 1e6).toFixed(2)}</span> : null}
-                          </>}
-                        </td>
-                        <td className="num">
-                          {marketCaps.get(token.id) ?? "—"}
-                        </td>
-                        <td className="num">{holders.toLocaleString()}</td>
-                      </tr>
-                    ),
-                  )
-                ) : (
-                  <tr>
-                    <td colSpan={5} className="empty-table">
-                      <div className="empty-state">
-                        <span>No live tokens yet.</span>
-                        <a className="btn btn--primary" href="/launch">
-                          Launch Token
-                        </a>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </div>
+          <form className="search" action="/" method="get"><input type="hidden" name="filter" value={page.filter} /><label>
+            <span className="sr-only">Search tokens</span>
+            <input
+              className="input"
+              data-card-search="" name="q" value={page.q} maxLength={80}
+              placeholder="Search name or ticker"
+            />
+          </label><button className="btn btn--ghost" type="submit">Search</button></form>
+        </div>
+        <div
+          className="launch-card-grid"
+          id="token-cards"
+          data-cards={JSON.stringify(cards)} data-page={JSON.stringify(page)}
+        >
+          <TokenCards items={cards} />
+        </div>
+        <p id="catalog-status" role="status">{page.total} launches</p>
+        <nav id="catalog-pagination" aria-label="Launch pages"><CatalogNavigation page={page} /></nav>
+      </section>
+      <section className="launchpad-principles">
+        <div>
+          <b>01 / Set the time</b>
+          <p>Fund the launch before its published schedule.</p>
+        </div>
+        <div>
+          <b>02 / Publish the plan</b>
+          <p>Three wallets. An exact allocation. A fixed sell target.</p>
+        </div>
+        <div>
+          <b>03 / Follow the money</b>
+          <p>Inspect buys, sales and profit receipts on each token's page.</p>
+        </div>
+      </section>
     </main>
   );
 }

@@ -1,6 +1,5 @@
-import {notifyLaunchWorker} from "../../../src/server/launch-wake";
-import { normalizeStrategy, assertStrategyAllowed, DESCRIPTION } from "../../../lib/strategy";
-import { saveFirstStrategy } from "../../../lib/governance";
+import { currentBrand } from "../../../src/server/site-brand";
+import { notifyLaunchWorker } from "../../../src/server/launch-wake";
 import {
   ApiError,
   apiJson,
@@ -45,27 +44,23 @@ export async function POST(request: Request): Promise<Response> {
         firstStrategy?: unknown;
         settings?: unknown;
       }
-    >(request, 16_384);
-    let firstStrategy;
+    >(request, 32_768);
     let settings;
     try {
       settings = parseLaunchSettings(payload.settings);
+      if(process.env.LAUNCHSEEDS_USER_BATCHES==="true"&&!settings.userBatches)throw new ApiError("The launch form has changed. Reload to configure fully funded batches.",409);
+      if (currentBrand().kind === "launchseeds" && !settings.publishMint) throw new ApiError("Publish the reserved CA with the launch plan.",400);
+      if (currentBrand().kind === "launchseeds" && settings.profitPolicy?.mode === "token") throw new ApiError("Choose a profit wallet or buy and burn.",400);
+      if (settings.scheduledAt === null)
+        throw new ApiError(
+          "Choose a scheduled launch time and publish the wallet allocation.",
+          400,
+        );
     } catch (error) {
-      throw new ApiError(error instanceof Error ? error.message : "Invalid launch settings.", 400);
-    }
-    try {
-      firstStrategy = await normalizeStrategy(payload.firstStrategy);
-      assertStrategyAllowed(firstStrategy, settings.holderRewards);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        /amount|strategy|stock|pack|address|handle|mode|account|recipient|market|holder|spread|position|profit/i.test(
-          error.message,
-        )
-      ) {
-        throw new ApiError(error.message, 400);
-      }
-      throw error;
+      throw new ApiError(
+        error instanceof Error ? error.message : "Invalid launch settings.",
+        400,
+      );
     }
     const capability =
       request.headers.get("authorization")?.replace(/^Bearer /, "") || "";
@@ -76,10 +71,9 @@ export async function POST(request: Request): Promise<Response> {
     const status = await service.create(
       {
         ...payload,
-        description: DESCRIPTION,
       },
       capability,
-      (tokenId) => saveFirstStrategy(tokenId, firstStrategy),
+      undefined,
       settings,
     );
     notifyLaunchWorker();

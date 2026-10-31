@@ -1,4 +1,8 @@
-import { ApiError, readBoundedJson, requireSameOrigin } from "../../../lib/api-security";
+import {
+  ApiError,
+  readBoundedJson,
+  requireSameOrigin,
+} from "../../../lib/api-security";
 import { IngressRateLimiter } from "../../../lib/trusted-client";
 import { publicRouteError } from "../../../src/server/route-errors";
 import { MAX_TOKEN_IMAGE_BYTES } from "../../../lib/media-policy";
@@ -11,7 +15,12 @@ let waiting = 0;
 // The name reaches a Codex prompt: plain letters, digits, spaces and . ' - only.
 const clean = (value: unknown, max: number) =>
   typeof value === "string"
-    ? value.normalize("NFKC").replace(/[^\p{L}\p{N} .'-]/gu, "").replace(/\s+/g, " ").trim().slice(0, max)
+    ? value
+        .normalize("NFKC")
+        .replace(/[^\p{L}\p{N} .'-]/gu, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, max)
     : "";
 
 /** Generates token artwork from the name via Codex (jsx-ai). Returns PNG bytes;
@@ -19,20 +28,31 @@ const clean = (value: unknown, max: number) =>
 export async function POST(request: Request): Promise<Response> {
   try {
     requireSameOrigin(request);
-    if (process.env.LAUNCHSEEDS_IMAGE_GENERATION !== "true") throw new ApiError("Image generation is not available.", 503);
+    if (process.env.LAUNCHSEEDS_IMAGE_GENERATION !== "true")
+      throw new ApiError("Image generation is not available.", 503);
     if (!limiter.check(request).allowed)
-      throw new ApiError("Image generation limit reached. Try again later.", 429);
+      throw new ApiError(
+        "Image generation limit reached. Try again later.",
+        429,
+      );
     const body = await readBoundedJson<Record<string, unknown>>(request, 1024);
     const name = clean(body.name, 32);
     const symbol = clean(body.symbol, 10).toUpperCase();
     if (!name) throw new ApiError("Enter a token name first.");
-    if (waiting >= MAX_WAITING) throw new ApiError("Image generation is busy. Try again in a minute.", 503);
+    if (waiting >= MAX_WAITING)
+      throw new ApiError(
+        "Image generation is busy. Try again in a minute.",
+        503,
+      );
     waiting++;
     let image: Buffer;
     try {
       image = await generateTokenImage(name, symbol, request.signal);
     } catch (error) {
-      console.error("Image generation failed", error instanceof Error ? error.message : error);
+      console.error(
+        "Image generation failed",
+        error instanceof Error ? error.message : error,
+      );
       throw new ApiError("Image generation failed. Try again.", 502);
     } finally {
       waiting--;

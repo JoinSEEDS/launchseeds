@@ -28,17 +28,40 @@ export type ClonedCoin = {
 export function publicUrl(raw: string): URL | null {
   const value = raw.trim().replace(/^ipfs:\/\//, IPFS_GATEWAY);
   let url: URL;
-  try { url = new URL(value); } catch { return null; }
-  if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return null;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    (url.port && url.port !== "443")
+  )
+    return null;
   const host = url.hostname.toLowerCase();
-  if (!host.includes(".") || /^[\d.]+$/.test(host) || host.includes(":") || /(^|\.)(localhost|local|internal|lan|home|corp)$/.test(host)) return null;
+  if (
+    !host.includes(".") ||
+    /^[\d.]+$/.test(host) ||
+    host.includes(":") ||
+    /(^|\.)(localhost|local|internal|lan|home|corp)$/.test(host)
+  )
+    return null;
   return url;
 }
 
-async function boundedFetch(raw: string, maxBytes: number, fetcher: typeof fetch = fetch): Promise<{ body: Uint8Array; type: string } | null> {
+async function boundedFetch(
+  raw: string,
+  maxBytes: number,
+  fetcher: typeof fetch = fetch,
+): Promise<{ body: Uint8Array; type: string } | null> {
   let url = publicUrl(raw);
   for (let hop = 0; url && hop < 4; hop++) {
-    const response = await fetcher(url, { redirect: "manual", signal: AbortSignal.timeout(8_000) });
+    const response = await fetcher(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(8_000),
+    });
     if (response.status >= 300 && response.status < 400) {
       const next = response.headers.get("location");
       url = next ? publicUrl(new URL(next, url).toString()) : null;
@@ -54,20 +77,33 @@ async function boundedFetch(raw: string, maxBytes: number, fetcher: typeof fetch
       const { done, value } = await reader.read();
       if (done) break;
       size += value.length;
-      if (size > maxBytes) { await reader.cancel(); return null; }
+      if (size > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
       chunks.push(value);
     }
     const body = new Uint8Array(size);
     let at = 0;
-    for (const c of chunks) { body.set(c, at); at += c.length; }
-    return { body, type: (response.headers.get("content-type") || "").split(";")[0]!.trim().toLowerCase() };
+    for (const c of chunks) {
+      body.set(c, at);
+      at += c.length;
+    }
+    return {
+      body,
+      type: (response.headers.get("content-type") || "")
+        .split(";")[0]!
+        .trim()
+        .toLowerCase(),
+    };
   }
   return null;
 }
 
 /** Image type from its bytes (headers can lie). */
 export function sniffImage(body: Uint8Array): string | null {
-  const ascii = (from: number, to: number) => String.fromCharCode(...body.subarray(from, to));
+  const ascii = (from: number, to: number) =>
+    String.fromCharCode(...body.subarray(from, to));
   if (body[0] === 0x89 && ascii(1, 4) === "PNG") return "image/png";
   if (body[0] === 0xff && body[1] === 0xd8) return "image/jpeg";
   if (ascii(0, 4) === "GIF8") return "image/gif";
@@ -79,37 +115,67 @@ async function onChainMetadata(connection: Connection, mint: PublicKey) {
   const info: any = await connection.getParsedAccountInfo(mint, "confirmed");
   const parsed = info.value?.data?.parsed;
   if (!parsed || parsed.type !== "mint") throw new Error("Not a token mint");
-  const meta = parsed.info.extensions?.find((e: any) => e.extension === "tokenMetadata")?.state;
-  if (meta?.name) return { name: String(meta.name), symbol: String(meta.symbol), uri: String(meta.uri) };
-  const [pda] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), METAPLEX.toBuffer(), mint.toBuffer()], METAPLEX);
+  const meta = parsed.info.extensions?.find(
+    (e: any) => e.extension === "tokenMetadata",
+  )?.state;
+  if (meta?.name)
+    return {
+      name: String(meta.name),
+      symbol: String(meta.symbol),
+      uri: String(meta.uri),
+    };
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("metadata"), METAPLEX.toBuffer(), mint.toBuffer()],
+    METAPLEX,
+  );
   const data = (await connection.getAccountInfo(pda, "confirmed"))?.data;
   if (!data) throw new Error("This coin has no metadata");
   let at = 65;
   const str = () => {
-    const n = data.readUInt32LE(at); at += 4;
-    const v = data.subarray(at, at + n).toString("utf8").replace(/\u0000+$/, ""); at += n;
+    const n = data.readUInt32LE(at);
+    at += 4;
+    const v = data
+      .subarray(at, at + n)
+      .toString("utf8")
+      .replace(/\u0000+$/, "");
+    at += n;
     return v;
   };
   return { name: str(), symbol: str(), uri: str() };
 }
 
-const text = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
+const text = (value: unknown, max: number) =>
+  typeof value === "string" ? value.trim().slice(0, max) : "";
 const link = (value: unknown) => {
   const url = typeof value === "string" ? publicUrl(value) : null;
   return url ? url.toString() : "";
 };
 
-export async function cloneCoin(connection: Connection, mintInput: string, fetcher: typeof fetch = fetch): Promise<ClonedCoin> {
+export async function cloneCoin(
+  connection: Connection,
+  mintInput: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ClonedCoin> {
   const mint = new PublicKey(mintInput.trim());
   const meta = await onChainMetadata(connection, mint);
-  const fetched = meta.uri ? await boundedFetch(meta.uri, MAX_JSON_BYTES, fetcher).catch(() => null) : null;
+  const fetched = meta.uri
+    ? await boundedFetch(meta.uri, MAX_JSON_BYTES, fetcher).catch(() => null)
+    : null;
   let json: any = {};
-  if (fetched) try { json = JSON.parse(new TextDecoder().decode(fetched.body)); } catch { json = {}; }
+  if (fetched)
+    try {
+      json = JSON.parse(new TextDecoder().decode(fetched.body));
+    } catch {
+      json = {};
+    }
   let image: string | null = null;
   if (typeof json.image === "string") {
-    const got = await boundedFetch(json.image, MAX_IMAGE_BYTES, fetcher).catch(() => null);
+    const got = await boundedFetch(json.image, MAX_IMAGE_BYTES, fetcher).catch(
+      () => null,
+    );
     const type = got ? sniffImage(got.body) : null;
-    if (got && type && IMAGE_TYPES.includes(type)) image = `data:${type};base64,${Buffer.from(got.body).toString("base64")}`;
+    if (got && type && IMAGE_TYPES.includes(type))
+      image = `data:${type};base64,${Buffer.from(got.body).toString("base64")}`;
   }
   return {
     mint: mint.toBase58(),

@@ -148,7 +148,8 @@ export function decode<K extends keyof Tables>(
   for (const key of bools)
     if (key in data) data[key] = data[key] === true || data[key] === 1;
   const id = Number(data.id);
-  if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Row is missing its id");
+  if (!Number.isSafeInteger(id) || id <= 0)
+    throw new Error("Row is missing its id");
   return { ...schemas[table].parse(data), id } as Tables[K];
 }
 export function record<K extends keyof Tables>(

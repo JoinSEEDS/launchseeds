@@ -1,8 +1,22 @@
+import { allocateUserBatches, batchWalletCount, userBatchFunding } from "../domain/user-funded-batches";
+import { BUYER_RESERVE_LAMPORTS, JITO_TIP_LAMPORTS } from "./launch-bundle";
+import { scheduledCommitment } from "../domain/scheduled-plan";
+import { PublicKey } from "@solana/web3.js";
+import { publicScheduledPlan } from "./scheduled-launches";
+import { allocatedBudget, type BundleBuyer } from "./launch-bundle";
+import { tokenVisible } from "./site-brand";
+import { reservedMint } from "../domain/reserved-mint";
 import { coinWebsite } from "../../lib/coin-url";
 import { createHash, randomUUID } from "node:crypto";
 import { DESCRIPTION } from "../../lib/strategy";
 import { ApiError } from "../../lib/api-security";
-import { DEFAULT_LAUNCH_SETTINGS, bundleFeeLamports, canonicalLaunchSettings, storedLaunchSettings, type LaunchSettings } from "../domain/launch-settings";
+import {
+  DEFAULT_LAUNCH_SETTINGS,
+  bundleFeeLamports,
+  canonicalLaunchSettings,
+  storedLaunchSettings,
+  type LaunchSettings,
+} from "../domain/launch-settings";
 import { marketMakerWalletName } from "./holder-reward-launch";
 import { Store, safeNumber } from "./store";
 import { canonicalStrategy } from "../domain/strategies";
@@ -15,8 +29,16 @@ import {
   type LaunchInput,
 } from "../shared/domain";
 export interface LaunchProvider {
+  readonly userBatches?: boolean;
+  validateUserBatchLayout?(input:{token:Token;fundingWallet:string;metadataUri:string;buyers:BundleBuyer[];settings:LaunchSettings}):Promise<void>;
   /** Read-only worker-produced ceiling, checked before exposing payment details. */
-  checkProtectionBudget?(lamports: number | null | undefined): void;
+  checkProtectionBudget?(
+    lamports: number | null | undefined,
+    exceptTokenId?: number,
+  ): void;
+  planBuyers?(mintSignerRef: string, budgets: bigint[]): BundleBuyer[];
+  /** User-funded columns: per column, a pool signer then fresh wallets. */
+  planColumns?(mintSignerRef: string, columns: bigint[][]): BundleBuyer[];
   /** Balance hints only; deposit history remains authoritative for funding. */
   fundedWallets?(wallets: string[]): Promise<Set<string>>;
   /** Generates and stores the token's mint keypair; the CA stays private until deployed. */
@@ -28,8 +50,8 @@ export interface LaunchProvider {
     description: string;
     image: string;
     website: string;
-    x?:string;
-    telegram?:string;
+    x?: string;
+    telegram?: string;
     devBuyLamports: number;
     refreshMetadata?: boolean;
     /** Existing launches keep their stored wallet names. */
@@ -72,7 +94,10 @@ export interface LaunchProvider {
     bundleLamports?: number | null;
     /** Holder-reward coins: creator fees to this wallet instead of to holders. */
     feesTo?: string | null;
-  }): Promise<{ intent: string; mintSignerRef: string; marketMaker?: string } | { wait: string; mintSignerRef: string }>;
+  }): Promise<
+    | { intent: string; mintSignerRef: string; marketMaker?: string }
+    | { wait: string; mintSignerRef: string }
+  >;
   executeDeployment(intent: string): Promise<{
     status: "pending" | "confirmed" | "expired";
     signature: string;
@@ -85,7 +110,8 @@ export interface LaunchProvider {
 /** The default description, unless the launcher wrote one; the website stays
  * empty unless the launcher set one (the coin's LaunchSeeds page is used then). */
 export function withLaunchDefaults(raw: LaunchInput): LaunchInput {
-  const description = typeof raw.description === "string" ? raw.description.trim() : "";
+  const description =
+    typeof raw.description === "string" ? raw.description.trim() : "";
   const website = typeof raw.website === "string" ? raw.website.trim() : "";
   return { ...raw, description: description || DESCRIPTION, website };
 }
@@ -93,14 +119,20 @@ export function withLaunchDefaults(raw: LaunchInput): LaunchInput {
 /** Private launch-status handle: unguessable while the CA is secret, and
  * public-safe once the token is live (everything is public by then). */
 export function launchHandle(mint: string): string {
-  return createHash("sha256").update(`launchseeds-launch:${mint}`).digest("hex").slice(0, 32);
+  return createHash("sha256")
+    .update(`launchseeds-launch:${mint}`)
+    .digest("hex")
+    .slice(0, 32);
 }
 
 /** Wallets of a prepared launch; only `preparing` launches lack them. */
 function preparedWallets(token: Token) {
   if (!token.fundingWallet || !token.rewardWallet)
     throw new Error("Launch is not prepared");
-  return { fundingWallet: token.fundingWallet, rewardWallet: token.rewardWallet };
+  return {
+    fundingWallet: token.fundingWallet,
+    rewardWallet: token.rewardWallet,
+  };
 }
 
 export class LaunchService {
@@ -116,22 +148,31 @@ export class LaunchService {
     settings: LaunchSettings = DEFAULT_LAUNCH_SETTINGS,
   ) {
     if (!this.provider) throw new Error("Launch service is not configured");
+    if (settings.userBatches && !this.provider.userBatches) throw new ApiError("User-funded batches are not enabled on this deployment.",503);
     const input = launchInput.parse(withLaunchDefaults(raw));
     if (!/^[a-f0-9]{64}$/.test(capability))
       throw new Error("Invalid launch key");
     const launchSettingsJson = canonicalLaunchSettings(settings);
     // Sniper protection is bought by LaunchSeeds's capital, not by a dev buy.
     if (settings.bundleLamports && solToLamports(input.devBuySol) > 0)
-      throw new Error("A launch with sniper protection has no separate launch buy");
+      throw new Error(
+        "A launch with sniper protection has no separate launch buy",
+      );
     // A reward-fund buy comes from the market-making wallet of a holders' coin.
     if (settings.feesTo && solToLamports(input.devBuySol) > 0)
       throw new Error("A coin whose fees go to a wallet has no reward fund");
     const accessHash = hash(capability),
-      requestHash = hash(JSON.stringify({ input, settingsJson: launchSettingsJson }));
+      requestHash = hash(
+        JSON.stringify({ input, settingsJson: launchSettingsJson }),
+      );
     const existingId = this.existing(accessHash, requestHash);
     let tokenId = existingId;
     if (tokenId === null) {
-      this.provider.checkProtectionBudget?.(settings.bundleLamports);
+      validateSchedule(settings);
+      this.provider.checkProtectionBudget?.(
+        settings.userBatches ? null : settings.bundleLamports,
+        typeof tokenId === "number" ? tokenId : undefined,
+      );
       // A lost race leaves only an unused, unfunded mint key behind.
       const mint = this.provider.createMint();
       tokenId = this.store.repo.tx((tx) => {
@@ -182,6 +223,37 @@ export class LaunchService {
     await this.resumePreparation(tokenId);
     return this.statusById(tokenId);
   }
+  private scheduledBuyers(
+    token: Token,
+    settings = storedLaunchSettings(token.launchSettingsJson),
+  ) {
+    if (settings.scheduledAt === null) return [];
+    if (!this.provider?.planBuyers || !token.mintSignerRef)
+      throw new Error("Scheduled launch planning is not configured");
+    if (settings.publishMint && !reservedMint(token)) throw new Error("Reserved mint is unavailable; do not fund this plan");
+    if (settings.userBatches) {
+      if (!this.provider.planColumns) throw new Error("Column launches are not configured");
+      const layout = allocateUserBatches(settings.userBatches, settings.scheduledAt);
+      const buyers = this.provider.planColumns(token.mintSignerRef, layout.map((column) => column.budgets));
+      const proceeds = settings.userBatches.proceedsWallet;
+      if (buyers.some((buyer) => buyer.wallet === proceeds) || proceeds === token.fundingWallet)
+        throw new ApiError("Choose an external proceeds wallet, not a launch or buyer wallet.", 400);
+      return buyers;
+    }
+    return this.provider.planBuyers(token.mintSignerRef, allocatedBudget(BigInt(settings.bundleLamports!), settings.walletSharesBps!));
+  }
+  private saveScheduledPlan(token:Token,settings=storedLaunchSettings(token.launchSettingsJson)) {
+    if(settings.scheduledAt===null)return;
+    const buyers=this.scheduledBuyers(token,settings);
+    this.store.repo.scheduledPlans.save({
+      tokenId: token.id,
+      buyersJson: JSON.stringify(buyers),
+      planHash: hash(
+        JSON.stringify(scheduledCommitment(token, settings, buyers)),
+      ),
+      createdAt: Date.now(),
+    });
+  }
   private existing(accessHash: string, requestHash: string): number | null {
     const existing = this.store.repo.tokens.getByAccess(accessHash);
     if (!existing) return null;
@@ -207,7 +279,9 @@ export class LaunchService {
     const input = launchInput.parse(JSON.parse(claimed.inputJson));
     try {
       const devBuyLamports = solToLamports(input.devBuySol);
-      this.provider.checkProtectionBudget?.(storedLaunchSettings(claimed.launchSettingsJson).bundleLamports);
+      this.provider.checkProtectionBudget?.(
+        protectionAmount(storedLaunchSettings(claimed.launchSettingsJson)),
+      );
       const prepared = await this.provider.prepare({
         tokenId,
         ...input,
@@ -219,13 +293,40 @@ export class LaunchService {
       if (prepared.requiredLamports <= devBuyLamports || !prepared.metadataUri)
         throw new Error("Invalid launch preparation");
       // The launcher pays the sniper-protection fee (3% of the bundle) on top.
-      const requiredLamports = prepared.requiredLamports + bundleFeeLamports(storedLaunchSettings(claimed.launchSettingsJson).bundleLamports);
-      this.provider.checkProtectionBudget?.(storedLaunchSettings(claimed.launchSettingsJson).bundleLamports);
+      if (storedLaunchSettings(claimed.launchSettingsJson).publishMint && reservedMint({mintSignerRef:prepared.mintSignerRef}) !== reservedMint(claimed)) throw new Error("Preparation changed the reserved CA; do not fund");
+      const choices=storedLaunchSettings(claimed.launchSettingsJson);
+      if(choices.userBatches){
+        if(!this.provider.userBatches||!this.provider.validateUserBatchLayout)throw Error("Batch validation is not configured");
+        const token={...claimed,fundingWallet:prepared.fundingWallet};
+        await this.provider.validateUserBatchLayout({token,fundingWallet:prepared.fundingWallet,metadataUri:prepared.metadataUri,buyers:this.scheduledBuyers(token,choices),settings:choices});
+      }
+      const requiredLamports =
+        prepared.requiredLamports +
+        launchSupplement(storedLaunchSettings(claimed.launchSettingsJson));
+      this.provider.checkProtectionBudget?.(
+        protectionAmount(storedLaunchSettings(claimed.launchSettingsJson)),
+      );
       return this.store.repo.tx((tx) => {
         const t = tx.tokens.get(tokenId);
-        if (!t || t.leaseId !== leaseId || t.status !== "preparing") return false;
+        if (!t || t.leaseId !== leaseId || t.status !== "preparing")
+          return false;
+        const schedule = storedLaunchSettings(t.launchSettingsJson).scheduledAt;
+        if (schedule !== null && schedule <= Date.now())
+          throw new ApiError(
+            "The chosen launch time passed during preparation. Choose a later time.",
+            409,
+          );
+        this.provider!.checkProtectionBudget?.(
+          protectionAmount(storedLaunchSettings(t.launchSettingsJson)),
+          t.id,
+        );
+        this.saveScheduledPlan(t);
         const state = tx.operations.state(tokenId);
-        if (!state) throw new Error("Initial strategy missing");
+        if (
+          !state &&
+          storedLaunchSettings(t.launchSettingsJson).scheduledAt === null
+        )
+          throw new Error("Initial strategy missing");
         return tx.tokens.markPrepared(tokenId, {
           fundingWallet: prepared.fundingWallet,
           fundingWalletName: prepared.fundingWalletName,
@@ -235,8 +336,11 @@ export class LaunchService {
           metadataUri: prepared.metadataUri,
           requiredLamports: String(requiredLamports),
           devBuyLamports: String(devBuyLamports),
-          quoteExpiresAt: now + 30 * 60_000,
-          activeStrategyId: state.initialStrategyId,
+          quoteExpiresAt: Math.min(
+            now + 30 * 60_000,
+            storedLaunchSettings(t.launchSettingsJson).scheduledAt ?? Infinity,
+          ),
+          activeStrategyId: state?.initialStrategyId ?? null,
           leaseId: "",
           leaseUntil: 0,
           error: null,
@@ -269,12 +373,14 @@ export class LaunchService {
     raw: LaunchInput,
     capability: string,
     settings: LaunchSettings,
-    firstStrategy: StrategyConfigValue,
+    firstStrategy: StrategyConfigValue | null,
   ) {
     if (!this.provider || !/^[a-f0-9]{64}$/.test(capability))
       throw new ApiError("Invalid launch amendment", 401);
+    if(settings.userBatches&&!this.provider.userBatches)throw new ApiError("User-funded batches are not enabled on this deployment.",503);
     const input = launchInput.parse(withLaunchDefaults(raw));
     const launchSettingsJson = canonicalLaunchSettings(settings);
+    validateSchedule(settings);
     const leaseId = crypto.randomUUID();
     const now = Date.now();
     const token = this.store.repo.tx((tx) => {
@@ -282,15 +388,24 @@ export class LaunchService {
       if (!token || token.accessHash !== hash(capability))
         throw new Error("Not found");
       if (tx.freeLaunches.byToken(token.id))
-        throw new ApiError("A sponsorship payment is already prepared. Token details are locked.", 409);
-      if (token.status !== "funding" ||
-          token.fundingReceivedLamports !== "0" ||
-          tx.deposits.sumLamports(token.id) !== 0n)
-        throw new ApiError("This launch is already funded or being deployed", 409);
+        throw new ApiError(
+          "A sponsorship payment is already prepared. Token details are locked.",
+          409,
+        );
+      if (
+        token.status !== "funding" ||
+        token.fundingReceivedLamports !== "0" ||
+        tx.deposits.sumLamports(token.id) !== 0n
+      )
+        throw new ApiError(
+          "This launch is already funded or being deployed",
+          409,
+        );
       if (token.leaseUntil > now)
         throw new ApiError("Another launch operation is in progress", 409);
       tx.tokens.updateLaunch(token.id, {
-        leaseId, leaseUntil: now + LaunchService.PREPARATION_LEASE_MS,
+        leaseId,
+        leaseUntil: now + LaunchService.PREPARATION_LEASE_MS,
       });
       return token;
     });
@@ -298,64 +413,137 @@ export class LaunchService {
     const wallets = preparedWallets(token);
     try {
       const verifyUnfunded = async () => {
-        if (this.provider!.hasIncomingFunds &&
-            await this.provider!.hasIncomingFunds(wallets.fundingWallet)) {
-          throw new ApiError("A payment is already arriving. Token details are locked.", 409);
+        if (
+          this.provider!.hasIncomingFunds &&
+          (await this.provider!.hasIncomingFunds(wallets.fundingWallet))
+        ) {
+          throw new ApiError(
+            "A payment is already arriving. Token details are locked.",
+            409,
+          );
         }
-        const deposits = await this.provider!.deposits(tokenId, wallets.fundingWallet);
+        const deposits = await this.provider!.deposits(
+          tokenId,
+          wallets.fundingWallet,
+        );
         if (deposits.some((deposit) => deposit.lamports > 0))
-          throw new ApiError("A payment has been detected. Token details are now locked.", 409);
+          throw new ApiError(
+            "A payment has been detected. Token details are now locked.",
+            409,
+          );
       };
       await verifyUnfunded();
-      this.provider.checkProtectionBudget?.(settings.bundleLamports);
+      this.provider.checkProtectionBudget?.(
+        settings.userBatches ? null : settings.bundleLamports,
+        typeof tokenId === "number" ? tokenId : undefined,
+      );
       const devBuyLamports = solToLamports(input.devBuySol);
       const prepared = await this.provider.prepare({
-        tokenId, ...input, devBuyLamports, refreshMetadata: true,
+        tokenId,
+        ...input,
+        devBuyLamports,
+        refreshMetadata: true,
         fundingWalletName: token.fundingWalletName,
         mintSignerRef: token.mintSignerRef,
       });
-      if (prepared.fundingWallet !== wallets.fundingWallet ||
-          prepared.rewardWallet !== wallets.rewardWallet ||
-          prepared.requiredLamports <= devBuyLamports ||
-          !prepared.metadataUri)
-        throw new ApiError("Revised launch quote changed wallet identity or lacks metadata", 503);
+      if (
+        (settings.publishMint && prepared.mintSignerRef !== token.mintSignerRef) ||
+        prepared.fundingWallet !== wallets.fundingWallet ||
+        prepared.rewardWallet !== wallets.rewardWallet ||
+        prepared.requiredLamports <= devBuyLamports ||
+        !prepared.metadataUri
+      )
+        throw new ApiError(
+          "Revised launch quote changed wallet identity or lacks metadata",
+          503,
+        );
       await verifyUnfunded();
-      this.provider.checkProtectionBudget?.(settings.bundleLamports);
-      const { config, configKey, configJson } = canonicalStrategy(firstStrategy);
+      this.provider.checkProtectionBudget?.(
+        settings.userBatches ? null : settings.bundleLamports,
+        typeof tokenId === "number" ? tokenId : undefined,
+      );
+      const canonical = firstStrategy ? canonicalStrategy(firstStrategy) : null;
+      if(settings.userBatches){
+        if(!this.provider.userBatches||!this.provider.validateUserBatchLayout)throw Error("Batch validation is not configured");
+        const revised={...token,...input,launchSettingsJson};
+        await this.provider.validateUserBatchLayout({token:revised,fundingWallet:prepared.fundingWallet,metadataUri:prepared.metadataUri,buyers:this.scheduledBuyers(revised,settings),settings});
+        await verifyUnfunded();
+      }
       this.store.repo.tx((tx) => {
         const current = tx.tokens.get(tokenId);
-        if (!current || current.leaseId !== leaseId ||
-            current.status !== "funding" ||
-            current.fundingReceivedLamports !== "0" ||
-            tx.deposits.sumLamports(tokenId) !== 0n)
+        if (
+          !current ||
+          current.leaseId !== leaseId ||
+          current.status !== "funding" ||
+          current.fundingReceivedLamports !== "0" ||
+          tx.deposits.sumLamports(tokenId) !== 0n
+        )
           throw new ApiError("Launch changed during amendment", 409);
         const state = tx.operations.state(tokenId);
-        if (!state) throw new Error("Initial strategy missing");
-        const initial = tx.strategies.getOrCreate({
-          tokenId, type: config.type,
-          configKey, configJson, enabled: true, createdAt: Date.now(),
-        });
-        tx.operations.updateState(tokenId, {
-          initialStrategyId: initial.id, switchedAt: Date.now(),
-        });
-        tx.tokens.setGovernance(tokenId, {
-          activeStrategyId: initial.id, leaderStrategyId: null, leaderSince: null,
-        });
+        if (settings.scheduledAt === null && !canonical)
+          throw new Error("Initial strategy missing");
+        if (canonical) {
+          const { config, configKey, configJson } = canonical;
+          if (!state) throw new Error("Initial strategy missing");
+          const initial = tx.strategies.getOrCreate({
+            tokenId,
+            type: config.type,
+            configKey,
+            configJson,
+            enabled: true,
+            createdAt: Date.now(),
+          });
+          tx.operations.updateState(tokenId, {
+            initialStrategyId: initial.id,
+            switchedAt: Date.now(),
+          });
+          tx.tokens.setGovernance(tokenId, {
+            activeStrategyId: initial.id,
+            leaderStrategyId: null,
+            leaderSince: null,
+          });
+        }
+        this.provider!.checkProtectionBudget?.(
+          settings.userBatches ? null : settings.bundleLamports,
+          current.id,
+        );
+        this.saveScheduledPlan(
+          { ...current, ...input, launchSettingsJson },
+          settings,
+        );
         tx.tokens.updateUnfundedDetails(tokenId, {
-          name: input.name, symbol: input.symbol, description: input.description,
-          image: input.image, website: input.website || coinWebsite(token.mint ?? token.mintSignerRef!.replace(/^launchseeds-mint-/, "")),
-          x: input.x || "", telegram: input.telegram || "",
+          name: input.name,
+          symbol: input.symbol,
+          description: input.description,
+          image: input.image,
+          website:
+            input.website ||
+            coinWebsite(
+              token.mint ?? token.mintSignerRef!.replace(/^launchseeds-mint-/, ""),
+            ),
+          x: input.x || "",
+          telegram: input.telegram || "",
           metadataUri: prepared.metadataUri,
-          requiredLamports: String(prepared.requiredLamports + bundleFeeLamports(storedLaunchSettings(launchSettingsJson).bundleLamports)),
+          requiredLamports: String(
+            prepared.requiredLamports +
+              launchSupplement(storedLaunchSettings(launchSettingsJson)),
+          ),
           devBuyLamports: String(devBuyLamports),
           launchSettingsJson,
           // A revised quote gets a fresh 30-minute window, like a new one.
-          quoteExpiresAt: Date.now() + 30 * 60_000,
+          quoteExpiresAt: Math.min(
+            Date.now() + 30 * 60_000,
+            settings.scheduledAt ?? Infinity,
+          ),
         });
         tx.tokens.updateLaunch(tokenId, {
           inputJson: JSON.stringify(input),
-          requestHash: hash(JSON.stringify({ input, settingsJson: launchSettingsJson })),
-          leaseId: "", leaseUntil: 0, error: null,
+          requestHash: hash(
+            JSON.stringify({ input, settingsJson: launchSettingsJson }),
+          ),
+          leaseId: "",
+          leaseUntil: 0,
+          error: null,
         });
       });
       return this.statusById(tokenId);
@@ -370,7 +558,8 @@ export class LaunchService {
 
   status(handle: string, capability: string) {
     const token = this.store.repo.tokens.getByHandle(handle);
-    if (!token || token.accessHash !== hash(capability)) throw new Error("Not found");
+    if (!token || token.accessHash !== hash(capability))
+      throw new Error("Not found");
     return this.statusById(token.id);
   }
   /** Read-only launch progress addressed by the private handle. */
@@ -381,26 +570,42 @@ export class LaunchService {
   }
   private statusById(tokenId: number) {
     const token = this.store.repo.tokens.get(tokenId);
-    if (!token) throw new Error("Not found");
+    if (!token || !tokenVisible(token)) throw new Error("Not found");
     const live = token.status === "live";
     return {
       handle: token.handle,
+      description: token.description,
+      website: token.website,
+      x: token.x,
+      telegram: token.telegram,
       status: token.status,
       name: token.name,
       symbol: token.symbol,
       fundingWallet: token.fundingWallet || "",
       requiredLamports: safeNumber(token.requiredLamports),
       receivedLamports: safeNumber(token.fundingReceivedLamports),
-      // The CA is only published once the token is live.
-      mint: live ? token.mint || "" : "",
+      // New plans publish only the reserved public address, never the signer.
+      mint: live || storedLaunchSettings(token.launchSettingsJson).publishMint ? reservedMint(token) ?? "" : "",
       launchSignature: token.deploySignature || "",
       settings: storedLaunchSettings(token.launchSettingsJson),
+      plan: this.store.repo.scheduledPlans.byToken(tokenId)
+        ? publicScheduledPlan(
+            this.store,
+            this.store.repo.scheduledPlans.byToken(tokenId)!.planHash,
+          )
+        : null,
       // Funding address and amount are valid until this time (countdown on the pay step).
       expiresAt: token.quoteExpiresAt,
       devBuyLamports: safeNumber(token.devBuyLamports),
-      rewardFundVerified: Boolean(live && token.rewardWallet &&
+      rewardFundVerified: Boolean(
+        live &&
+        token.rewardWallet &&
         BigInt(token.devBuyLamports) > 0n &&
-        BigInt(this.store.repo.holders.get(tokenId, token.rewardWallet)?.balanceRaw ?? "0") > 0n),
+        BigInt(
+          this.store.repo.holders.get(tokenId, token.rewardWallet)
+            ?.balanceRaw ?? "0",
+        ) > 0n,
+      ),
       error: token.error
         ? "Launch needs operator attention. Do not send more funds."
         : "",
@@ -409,27 +614,41 @@ export class LaunchService {
   async process(tokenId: number) {
     if (!this.provider) throw new Error("Launch service is not configured");
     const leaseId = randomUUID();
-    const acquired = this.store.repo.tx(tx => {
+    const acquired = this.store.repo.tx((tx) => {
       const current = tx.tokens.get(tokenId);
-      if (!current || !["funding", "deploying"].includes(current.status) || current.leaseUntil > Date.now()) return false;
-      tx.tokens.updateLaunch(tokenId, { leaseId, leaseUntil: Date.now() + LaunchService.PREPARATION_LEASE_MS });
+      if (
+        !current ||
+        !["funding", "deploying"].includes(current.status) ||
+        current.leaseUntil > Date.now()
+      )
+        return false;
+      tx.tokens.updateLaunch(tokenId, {
+        leaseId,
+        leaseUntil: Date.now() + LaunchService.PREPARATION_LEASE_MS,
+      });
       return true;
     });
     if (!acquired) return;
     const assertLease = () => {
       const current = this.store.repo.tokens.get(tokenId);
-      if (current?.leaseId !== leaseId || current.leaseUntil <= Date.now()) throw new Error("Launch processing lease lost; reconcile persisted intent");
+      if (current?.leaseId !== leaseId || current.leaseUntil <= Date.now())
+        throw new Error(
+          "Launch processing lease lost; reconcile persisted intent",
+        );
     };
     const heartbeat = setInterval(() => {
       const current = this.store.repo.tokens.get(tokenId);
       if (current?.leaseId === leaseId && current.leaseUntil > Date.now())
-        this.store.repo.tokens.updateLaunch(tokenId, { leaseUntil: Date.now() + LaunchService.PREPARATION_LEASE_MS });
+        this.store.repo.tokens.updateLaunch(tokenId, {
+          leaseUntil: Date.now() + LaunchService.PREPARATION_LEASE_MS,
+        });
     }, 10_000);
     heartbeat.unref();
-    try { await this.processLeased(tokenId, assertLease); }
-    finally {
+    try {
+      await this.processLeased(tokenId, assertLease);
+    } finally {
       clearInterval(heartbeat);
-      this.store.repo.tx(tx => {
+      this.store.repo.tx((tx) => {
         if (tx.tokens.get(tokenId)?.leaseId === leaseId)
           tx.tokens.updateLaunch(tokenId, { leaseId: "", leaseUntil: 0 });
       });
@@ -459,7 +678,9 @@ export class LaunchService {
         }
         // The wallet that paid first is the launcher: it may close the coin's
         // sniper protection from the coin page.
-        const first = [...deposits].sort((a, b) => a.confirmedSlot - b.confirmedSlot).find((d) => d.sender);
+        const first = [...deposits]
+          .sort((a, b) => a.confirmedSlot - b.confirmedSlot)
+          .find((d) => d.sender);
         if (first?.sender) tx.tokens.recordLauncher(tokenId, first.sender);
         tx.tokens.update(tokenId, {
           fundingReceivedLamports: tx.deposits.sumLamports(tokenId).toString(),
@@ -470,6 +691,24 @@ export class LaunchService {
         BigInt(token.fundingReceivedLamports) < BigInt(token.requiredLamports)
       )
         return;
+      const schedule = storedLaunchSettings(
+        token.launchSettingsJson,
+      ).scheduledAt;
+      if (schedule !== null) {
+        const paid = this.store.repo.deposits.listByToken(tokenId);
+        if (Date.now() < schedule) return;
+        const deadline = Math.min(schedule, token.quoteExpiresAt ?? schedule);
+        const onTime = paid
+          .filter((d) => d.confirmedAt <= deadline)
+          .reduce((sum, d) => sum + BigInt(d.lamports), 0n);
+        if (onTime < BigInt(token.requiredLamports)) {
+          this.store.repo.tokens.updateLaunch(tokenId, {
+            error:
+              "Scheduled time missed: payment was not confirmed in time. Operator refund review required.",
+          });
+          return;
+        }
+      }
       const prepared = await provider.prepareDeployment({
         tokenId,
         fundingWallet,
@@ -478,23 +717,31 @@ export class LaunchService {
         symbol: token.symbol,
         devBuyLamports: safeNumber(token.devBuyLamports),
         mintSignerRef: token.mintSignerRef,
-        holderRewards: storedLaunchSettings(token.launchSettingsJson).holderRewards,
-        bundleLamports: storedLaunchSettings(token.launchSettingsJson).bundleLamports,
+        holderRewards: storedLaunchSettings(token.launchSettingsJson)
+          .holderRewards,
+        bundleLamports: storedLaunchSettings(token.launchSettingsJson)
+          .bundleLamports,
         feesTo: storedLaunchSettings(token.launchSettingsJson).feesTo,
       });
       assertLease();
       // Sniper-protection capital is being freed (an earlier coin is selling): next round.
       if ("wait" in prepared) {
-        this.store.repo.tokens.updateLaunch(tokenId, { error: prepared.wait.slice(0, 500) });
+        this.store.repo.tokens.updateLaunch(tokenId, {
+          error: prepared.wait.slice(0, 500),
+        });
         return;
       }
       this.store.repo.tx((tx) => {
         const current = tx.tokens.get(tokenId)!;
         if (current.status !== "funding") return;
-        tx.tokens.updateLaunch(tokenId, { intent: prepared.intent, error: null });
+        tx.tokens.updateLaunch(tokenId, {
+          intent: prepared.intent,
+          error: null,
+        });
         tx.tokens.update(tokenId, { mintSignerRef: prepared.mintSignerRef });
         // The public market-making wallet receives the launch buy.
-        if (prepared.marketMaker) tx.tokens.assignMarketMaker(tokenId, prepared.marketMaker);
+        if (prepared.marketMaker)
+          tx.tokens.assignMarketMaker(tokenId, prepared.marketMaker);
         tx.tokens.transition(tokenId, "funding", "deploying");
       });
     }
@@ -510,7 +757,8 @@ export class LaunchService {
       assertLease();
       const stored = this.store.repo.tx((tx) => {
         const current = tx.tokens.get(tokenId);
-        if (current?.status !== "deploying" || current.intent !== intent) return false;
+        if (current?.status !== "deploying" || current.intent !== intent)
+          return false;
         tx.tokens.updateLaunch(tokenId, { intent: replacement, error: null });
         tx.tokens.update(tokenId, { deploySignature: null });
         return true;
@@ -520,20 +768,63 @@ export class LaunchService {
       assertLease();
     }
     if (result.status === "pending")
-      this.store.repo.tokens.update(tokenId, { deploySignature: result.signature });
+      this.store.repo.tokens.update(tokenId, {
+        deploySignature: result.signature,
+      });
     if (result.status === "confirmed")
       this.store.repo.tx((tx) => {
-        if (!tx.tokens.transition(tokenId, "deploying", "live", {
-          mint: result.mint,
-          deploySignature: result.signature,
-          launchedAt: Date.now(),
-        }))
+        if (
+          !tx.tokens.transition(tokenId, "deploying", "live", {
+            mint: result.mint,
+            deploySignature: result.signature,
+            launchedAt: Date.now(),
+          })
+        )
           return;
         // A holder-reward coin's treasury is its public market-making wallet: the
         // fixed sell plan's profit is spent from there on the coin's strategy.
         const live = tx.tokens.get(tokenId)!;
-        if (storedLaunchSettings(live.launchSettingsJson).holderRewards && live.devBuyRecipient)
-          tx.tokens.adoptMarketMakerTreasury(tokenId, { rewardWallet: live.devBuyRecipient, fundingWalletName: marketMakerWalletName(result.mint) });
+        if (
+          storedLaunchSettings(live.launchSettingsJson).holderRewards &&
+          live.devBuyRecipient
+        )
+          tx.tokens.adoptMarketMakerTreasury(tokenId, {
+            rewardWallet: live.devBuyRecipient,
+            fundingWalletName: marketMakerWalletName(result.mint),
+          });
       });
   }
+}
+
+export function validateSchedule(settings: LaunchSettings, now = Date.now()) {
+  if (settings.feesTo) {
+    try { new PublicKey(settings.feesTo); }
+    catch { throw new ApiError("Enter a valid creator-fee address.",400); }
+  }
+  if (settings.profitPolicy?.mode === "wallet") {
+    try {
+      new PublicKey(settings.profitPolicy.wallet);
+    } catch {
+      throw new ApiError("Enter a valid profit wallet.", 400);
+    }
+  }
+  if (settings.scheduledAt === null) return;
+  if (
+    settings.scheduledAt < now + 120_000 ||
+    settings.scheduledAt > now + 7 * 86_400_000
+  )
+    throw new ApiError(
+      "Choose a launch time between 2 minutes and 7 days from now.",
+      400,
+    );
+  if (settings.userBatches) {
+    allocateUserBatches(settings.userBatches, settings.scheduledAt);
+    try { new PublicKey(settings.userBatches.proceedsWallet); } catch { throw new ApiError("Enter a valid proceeds wallet.", 400); }
+  } else allocatedBudget(BigInt(settings.bundleLamports!), settings.walletSharesBps!);
+}
+
+function protectionAmount(settings: LaunchSettings) { return settings.userBatches ? null : settings.bundleLamports; }
+export function launchSupplement(settings: LaunchSettings) {
+  if (!settings.userBatches) return bundleFeeLamports(settings.bundleLamports);
+  return Number(userBatchFunding({totalBuy:BigInt(settings.bundleLamports!),walletCount:batchWalletCount(settings.userBatches),baseFee:0n,serviceFee:0n,reservePerWallet:BigInt(BUYER_RESERVE_LAMPORTS),bundleTip:BigInt(JITO_TIP_LAMPORTS)}).required);
 }

@@ -1,8 +1,18 @@
-# Launchseeds — finalized data layer
+# LaunchSeeds - scheduled, transparent token launches
 
-This package contains the authoritative **13-table Zod schema**, explicit SQLite indexes,
-**unified table-split repository implementation**, and transaction examples. It is the
-persistence layer, **not a complete mainnet application or integrated service runtime**.
+LaunchSeeds is a Bun/TradJS application with SQLite repositories and a separately supervised worker. The launchpad presents tokens as cards and publishes each new launch's schedule, three protection wallets, exact allocations, sell target and profit destination.
+
+New launches are scheduled2minutes to7days ahead. Users allocate100% of protection across three wallets (each at least0.03SOL), then fund a time-limited quote. Published quotes reserve capital; timely payments retain that reservation until execution. The worker cannot prepare/send creation before the chosen time. Network confirmation and available capital determine actual inclusion; late payment requires refund review instead of silently launching later.
+
+Profit can go to a validated SOL wallet or buy back and burn the launched token. Wallet payouts keep0.00005SOL for fees; buy/burn keeps0.005SOL for fees/rent and requires0.002SOL left for the purchase. Small profits stay in the fund. Only finalized purchased-token deltas are burned, with signed intents persisted before submission. Scheduled trade profit excludes the separate launch-fee wallet. Cashback is unavailable while its loss definition awaits confirmation.
+
+`/coin/<reserved-CA>` shows the coin before and after launch, with a live countdown, published plan and (after launch) price chart. Legacy `/schedule/<plan-hash>` links remain compatible. Choose minutes from now (3 minutes to 7 days) or an absolute local date/time; the quote locks the UTC timestamp. `/api/schedules/<plan-hash>` includes the canonical commitment object; SHA256 of its JSON is the displayed hash. This is a server-persisted public commitment, not an on-chain anti-tampering guarantee. Existing launches, claims and legacy reward histories remain supported. The new UI removes retired strategy, puzzle, liquidity and reward-fund choices.
+
+Run `bun install`, `bun run check`, `bun test`, `bun run build`. Local web startup: `bun run dev`. Configuration and wallet keys stay in ignored `.config.toml`; worker/live operations require explicit configuration. See [scheduled launches](docs/SCHEDULED-LAUNCHES.md) and the existing operational notes below.
+
+The launchpad uses database cursor pagination (24 cards per page), with server-side name/ticker/CA search and All/Scheduled/Live filters. Previous/Next links preserve the query and work without JavaScript. `/api/launch-catalog` returns card pages; `/api/tokens` returns a bounded live-token page plus pagination metadata. Cursors are bound to the search and domain scope.
+
+Project descriptions support 4,000 characters and line breaks. Create and unfunded edits preserve the text in metadata and the published plan. New version-3 commitments include it; historical hashes keep their original format. Receiving funds locks edits. Protection wallets remain separate, while settled-profit buybacks use the shared capital wallet.
 
 ## Files
 
@@ -137,3 +147,8 @@ In production, run the same `bun run start` behind Caddy; keep it bound to
 
 Automatic bundle exits use a pre-signed fixed-minimum sale (102% of each wallet's buy budget, before network fees), persisted at fill confirmation and checked on the fast launch loop. Unsent candidates renew before blockhash expiry. Automatic capital rotation respects this floor; explicit operator liquidation is separate.
 Protection sizing is capped before payment using a worker-produced liquid-budget snapshot. Unsold positions and earmarked reward funds are excluded. The form offers smaller sizes or a launch without protection; the backend independently checks the ceiling before exposing payment details. This is a per-launch ceiling, not a reservation or a promise that rotating capital is immediately available. Existing funded requests remain unchanged.
+
+
+BOOST buyback timing and owner-approved raffle delivery: [operator and behavior guide](docs/BOOST-REWARD-APPROVAL.md). A new `launchseeds.reward_approval_wallet` is required to approve future winner transfers; no historical owner-wallet fallback is used.
+
+LaunchSeeds domain configuration, fixed history cutoff, public reserved CAs and creator-fee choice: [LaunchSeeds guide](docs/LAUNCHSEEDS.md).

@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { ensureWorker, WORKER_COMMAND, WORKER_PROCESS } from "../src/server/worker-supervisor";
+import {
+  ensureWorker,
+  WORKER_COMMAND,
+  WORKER_PROCESS,
+} from "../src/server/worker-supervisor";
 
 test("web startup ensures the single detached worker through bgrun", async () => {
   const calls: unknown[] = [];
@@ -18,7 +22,9 @@ test("web startup ensures the single detached worker through bgrun", async () =>
     command: WORKER_COMMAND,
     detached: true,
   });
-  expect(String((calls[0] as { config: string }).config)).toEndWith(".config.toml");
+  expect(String((calls[0] as { config: string }).config)).toEndWith(
+    ".config.toml",
+  );
 });
 
 test("worker autostart is skipped unless workers are enabled", async () => {

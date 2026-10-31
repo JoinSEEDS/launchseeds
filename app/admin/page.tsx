@@ -187,14 +187,24 @@ export default function AdminPage() {
               </span>
             </div>
             <div className="admin__log-streams">
-              <section className="admin__log-stream" aria-labelledby="admin-log-stdout-title">
-                <h3 className="admin__log-title" id="admin-log-stdout-title">stdout</h3>
+              <section
+                className="admin__log-stream"
+                aria-labelledby="admin-log-stdout-title"
+              >
+                <h3 className="admin__log-title" id="admin-log-stdout-title">
+                  stdout
+                </h3>
                 <pre className="admin__logs" id="admin-log-stdout" tabIndex={0}>
                   Select a process to view its logs.
                 </pre>
               </section>
-              <section className="admin__log-stream admin__log-stream--err" aria-labelledby="admin-log-stderr-title">
-                <h3 className="admin__log-title" id="admin-log-stderr-title">stderr</h3>
+              <section
+                className="admin__log-stream admin__log-stream--err"
+                aria-labelledby="admin-log-stderr-title"
+              >
+                <h3 className="admin__log-title" id="admin-log-stderr-title">
+                  stderr
+                </h3>
                 <pre className="admin__logs" id="admin-log-stderr" tabIndex={0}>
                   Select a process to view its logs.
                 </pre>

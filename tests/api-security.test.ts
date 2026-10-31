@@ -122,9 +122,23 @@ describe("request limiting and wallet shape", () => {
 
 test("same-origin reads accept Sec-Fetch-Site from our pages and refuse other sites", async () => {
   const { requireSameOriginRead } = await import("../lib/api-security");
-  const request = (headers: Record<string, string>) => new Request("http://localhost:3010/api/clone?mint=x", { headers });
-  expect(() => requireSameOriginRead(request({ "sec-fetch-site": "same-origin" }))).not.toThrow();
-  expect(() => requireSameOriginRead(request({ origin: "http://localhost:3010" }))).not.toThrow();
-  expect(() => requireSameOriginRead(request({ "sec-fetch-site": "cross-site", origin: "https://evil.example" }))).toThrow("Origin not allowed");
-  expect(() => requireSameOriginRead(request({}))).toThrow("Origin not allowed");
+  const request = (headers: Record<string, string>) =>
+    new Request("http://localhost:3010/api/clone?mint=x", { headers });
+  expect(() =>
+    requireSameOriginRead(request({ "sec-fetch-site": "same-origin" })),
+  ).not.toThrow();
+  expect(() =>
+    requireSameOriginRead(request({ origin: "http://localhost:3010" })),
+  ).not.toThrow();
+  expect(() =>
+    requireSameOriginRead(
+      request({
+        "sec-fetch-site": "cross-site",
+        origin: "https://evil.example",
+      }),
+    ),
+  ).toThrow("Origin not allowed");
+  expect(() => requireSameOriginRead(request({}))).toThrow(
+    "Origin not allowed",
+  );
 });

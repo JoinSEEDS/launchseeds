@@ -1,3 +1,4 @@
+import type { ScheduledLaunchView } from "../src/server/scheduled-launches";
 import { coinPath } from "./coin-url";
 import type { LaunchSettings } from "../src/domain/launch-settings";
 import { MAX_TOKEN_IMAGE_BYTES, TOKEN_IMAGE_SIZE_ERROR } from "./media-policy";
@@ -9,6 +10,10 @@ export type LaunchPhase =
   "preparing" | "funding" | "deploying" | "live" | "failed";
 
 export interface PublicLaunchStatus {
+  website?: string;
+  x?: string;
+  telegram?: string;
+  description?: string;
   /** Private launch-status handle (not a database id). */
   handle: string;
   status: LaunchPhase;
@@ -23,6 +28,7 @@ export interface PublicLaunchStatus {
   devBuyLamports?: number;
   rewardFundVerified?: boolean;
   settings?: LaunchSettings;
+  plan?: ScheduledLaunchView | null;
   /** Quote expiry (ms); the funding address is valid until then. */
   expiresAt?: number;
 }
@@ -38,7 +44,7 @@ export interface LaunchFormFields {
   x: string;
   telegram: string;
   image: string;
-  firstStrategy: Strategy;
+  firstStrategy: Strategy | null;
   settings: LaunchSettings;
 }
 
@@ -70,7 +76,14 @@ export function launchView(status: PublicLaunchStatus): LaunchView {
   const required = safeLamports(status.requiredLamports);
   const received = safeLamports(status.receivedLamports);
   const hasAddress = walletAddress.test(status.fundingWallet);
-  const canFund = phase === "funding" && hasAddress && required > 0;
+  const canFund =
+    phase === "funding" &&
+    hasAddress &&
+    required > 0 &&
+    received < required &&
+    (!status.settings?.scheduledAt ||
+      Date.now() <
+        Math.min(status.settings.scheduledAt, status.expiresAt ?? Infinity));
   const funded = required > 0 && received >= required;
   const progress =
     required > 0 ? Math.min(100, (received / required) * 100) : 0;
@@ -81,7 +94,19 @@ export function launchView(status: PublicLaunchStatus): LaunchView {
         ? "Preparing a unique funding address. Do not send funds yet."
         : phase === "funding"
           ? hasAddress
-            ? `Waiting for a confirmed deposit. ${formatLamports(received)} SOL received.`
+            ? funded && status.settings?.scheduledAt
+              ? status.error ||
+                (Date.now() < status.settings.scheduledAt
+                  ? `Funded. Scheduled for ${new Date(status.settings.scheduledAt).toISOString()}.`
+                  : "Scheduled time reached. Preparing the launch; any delay will be shown here.")
+              : status.settings?.scheduledAt &&
+                  Date.now() >=
+                    Math.min(
+                      status.settings.scheduledAt,
+                      status.expiresAt ?? Infinity,
+                    )
+                ? "Payment deadline passed. Do not send funds. Late payments require refund review."
+                : `Waiting for a confirmed deposit. ${formatLamports(received)} SOL received.`
             : "Funding address unavailable. Do not send funds."
           : phase === "deploying"
             ? "Deposit confirmed. Deployment is in progress."
@@ -166,10 +191,13 @@ export function validateLaunchFields(fields: LaunchFormFields): string | null {
   if (parseSol(fields.devBuySol) === null) {
     return "Enter a valid initial reward fund amount in SOL, with up to nine decimals.";
   }
-  if ((fields.description ?? "").trim().length > 500) {
-    return "Keep the description under 500 characters.";
+  if ((fields.description ?? "").trim().length > 4000) {
+    return "Keep the description under 4,000 characters.";
   }
-  if (fields.website.trim() && !/^https:\/\/[^\s]+$/i.test(fields.website.trim())) {
+  if (
+    fields.website.trim() &&
+    !/^https:\/\/[^\s]+$/i.test(fields.website.trim())
+  ) {
     return "Website must begin with https://.";
   }
   if (!validX(fields.x)) {
@@ -178,7 +206,8 @@ export function validateLaunchFields(fields: LaunchFormFields): string | null {
   if (!validTelegram(fields.telegram)) {
     return "Enter a Telegram handle or t.me link, or leave it blank.";
   }
-  if (!fields.firstStrategy) return "Choose a starting strategy.";
+  if (!fields.firstStrategy && fields.settings.scheduledAt === null)
+    return "Choose a starting strategy.";
   return null;
 }
 
@@ -199,7 +228,9 @@ export function buildLaunchPayload(fields: LaunchFormFields) {
 
 /** The public launch URL identifies a read-only operation, not a capability. */
 export function launchUrl(handle: string): string | null {
-  return handlePattern.test(handle) ? `/launch?launch=${encodeURIComponent(handle)}` : null;
+  return handlePattern.test(handle)
+    ? `/launch?launch=${encodeURIComponent(handle)}`
+    : null;
 }
 
 /** Token pages are addressed by CA, which only exists once the token is live. */

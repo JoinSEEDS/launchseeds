@@ -1,8 +1,5 @@
 import { render } from "tradjs/client";
-import type {
-  ProcessSummary,
-  AdminAction,
-} from "../../lib/admin/bgrun";
+import type { ProcessSummary, AdminAction } from "../../lib/admin/bgrun";
 
 interface Session {
   authenticated: boolean;

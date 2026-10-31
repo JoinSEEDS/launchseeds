@@ -56,7 +56,10 @@ test("launch preparation, finalized deposits and signed deployment intent surviv
       ];
     },
     async prepareDeployment() {
-      return { intent: "persisted-signed-bytes", mintSignerRef: `launchseeds-mint-${MINT}` };
+      return {
+        intent: "persisted-signed-bytes",
+        mintSignerRef: `launchseeds-mint-${MINT}`,
+      };
     },
     async executeDeployment(intent) {
       deployed.push(intent);
@@ -90,9 +93,7 @@ test("launch preparation, finalized deposits and signed deployment intent surviv
   await launch.process(tokenId);
   expect(launch.publicStatus(result.handle).status).toBe("deploying");
   expect(store.repo.deposits.listByToken(tokenId)).toHaveLength(1);
-  expect(store.repo.deposits.listByToken(tokenId)[0]!.confirmedSlot).toBe(
-    42,
-  );
+  expect(store.repo.deposits.listByToken(tokenId)[0]!.confirmedSlot).toBe(42);
   store.close();
   store = new Store(openLaunchseedsData(file));
   launch = new LaunchService(store, provider);

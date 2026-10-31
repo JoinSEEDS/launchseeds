@@ -110,12 +110,22 @@ describe("method-specific route handlers", () => {
     expect(chance.balance).toBe(25);
     expect(chance.gravity).toBe(100);
     expect(chance.probability).toBe(1);
-    store.repo.holders.syncBalance({ tokenId: token.id, wallet: holderWallet, balanceRaw: "0", slot: 2, observedAt: Date.now() + 1 });
-    const sold = await body(holderChance(url(`/api/tokens/${wallet}/chance?wallet=${holderWallet}`)));
+    store.repo.holders.syncBalance({
+      tokenId: token.id,
+      wallet: holderWallet,
+      balanceRaw: "0",
+      slot: 2,
+      observedAt: Date.now() + 1,
+    });
+    const sold = await body(
+      holderChance(url(`/api/tokens/${wallet}/chance?wallet=${holderWallet}`)),
+    );
     expect(sold.balance).toBe(0);
     expect(sold.gravity).toBe(100);
     expect(sold.probability).toBe(1);
-    const status = await body(await launchStatus(url(`/api/launches/${token.handle}`)));
+    const status = await body(
+      await launchStatus(url(`/api/launches/${token.handle}`)),
+    );
     expect(status.handle).toBe(token.handle);
     expect(status).not.toHaveProperty("id");
     expect(status).not.toHaveProperty("accessHash");

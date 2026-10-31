@@ -76,11 +76,19 @@ export class WorkerHealthRepository {
     return workerId;
   }
   /** Only the currently registered, active worker may write its heartbeat. */
-  private own(workerId: string, patch: Partial<WorkerHeartbeat>, activeOnly = true) {
+  private own(
+    workerId: string,
+    patch: Partial<WorkerHeartbeat>,
+    activeOnly = true,
+  ) {
     return (
       this.db.workerHealth
         .select()
-        .where({ name: WORKER, workerId, ...(activeOnly ? { active: true } : {}) })
+        .where({
+          name: WORKER,
+          workerId,
+          ...(activeOnly ? { active: true } : {}),
+        })
         .updateAll(patch) === 1
     );
   }
@@ -108,7 +116,11 @@ export class WorkerHealthRepository {
     });
   }
   stop(workerId: string, now = Date.now()): boolean {
-    return this.own(workerId, { active: false, healthy: false, heartbeatAt: now }, false);
+    return this.own(
+      workerId,
+      { active: false, healthy: false, heartbeatAt: now },
+      false,
+    );
   }
 }
 
@@ -178,15 +190,18 @@ export async function probeFinalizedRpc(
 /** A primary endpoint's cooldown must not disable launches while a configured
  * backup can prove finalized chain access. Each probe is bounded and coalesced. */
 export async function probeConfiguredRpc(
-  urls: string[], now = Date.now(),
+  urls: string[],
+  now = Date.now(),
   probe: (url: string, now: number) => Promise<RpcProbe> = probeFinalizedRpc,
 ): Promise<RpcProbe> {
   try {
-    return await Promise.any([...new Set(urls)].map(async url => {
-      const result = await probe(url, now);
-      if (!result.healthy) throw new Error("RPC probe failed");
-      return result;
-    }));
+    return await Promise.any(
+      [...new Set(urls)].map(async (url) => {
+        const result = await probe(url, now);
+        if (!result.healthy) throw new Error("RPC probe failed");
+        return result;
+      }),
+    );
   } catch {
     return { healthy: false, checkedAt: Date.now(), slot: 0 };
   }

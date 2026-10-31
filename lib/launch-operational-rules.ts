@@ -62,8 +62,7 @@ export function assessLaunchReadiness(
   if (!input.flags.live) blockers.push("operations_disabled");
   if (!input.flags.worker) blockers.push("worker_disabled");
   if (!input.config.signedIngress) blockers.push("trusted_ingress_unavailable");
-  if (!input.config.rpc)
-    blockers.push("configuration_incomplete");
+  if (!input.config.rpc) blockers.push("configuration_incomplete");
   const fee = input.config.feeLamports;
   if (fee === null || !Number.isSafeInteger(fee) || fee <= 0)
     blockers.push("base_fee_invalid");

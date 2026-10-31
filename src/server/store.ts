@@ -1,3 +1,4 @@
+import { tokenVisible } from "./site-brand";
 import { isTokenToken } from "./token-holders";
 import { lastKnownSolUsd } from "./sol-price";
 import { createLaunchseedsCoreServices } from "../services";
@@ -38,14 +39,23 @@ export class Store {
     // known SOL price (none known yet: not counted rather than guessed).
     const solTreasury = this.repo.treasuries.getByOwner(token.id, "SOL");
     const price = solTreasury ? lastKnownSolUsd() : null;
-    const solTotals = solTreasury && price ? this.repo.ledger.totals(solTreasury.id) : { collected: 0n, spent: 0n };
-    const lamportsToMicros = (lamports: bigint) => (lamports * BigInt(Math.round(price! * 1e6))) / 1_000_000_000n;
+    const solTotals =
+      solTreasury && price
+        ? this.repo.ledger.totals(solTreasury.id)
+        : { collected: 0n, spent: 0n };
+    const lamportsToMicros = (lamports: bigint) =>
+      (lamports * BigInt(Math.round(price! * 1e6))) / 1_000_000_000n;
     const totals = price
-      ? { collected: usdc.collected + lamportsToMicros(solTotals.collected), spent: usdc.spent + lamportsToMicros(solTotals.spent) }
+      ? {
+          collected: usdc.collected + lamportsToMicros(solTotals.collected),
+          spent: usdc.spent + lamportsToMicros(solTotals.spent),
+        }
       : usdc;
     const reserved =
       (treasury ? safeNumber(treasury.reservedAtomic) : 0) +
-      (solTreasury && price ? safeNumber(lamportsToMicros(BigInt(solTreasury.reservedAtomic))) : 0);
+      (solTreasury && price
+        ? safeNumber(lamportsToMicros(BigInt(solTreasury.reservedAtomic)))
+        : 0);
     return {
       ...token,
       mint: token.mint || "",
@@ -60,7 +70,10 @@ export class Store {
       collectedMicros: safeNumber(totals.collected),
       spentMicros: safeNumber(totals.spent),
       reservedMicros: reserved,
-      holdersUpdatedAt: state?.snapshotAt || 0,
+      holdersUpdatedAt: Math.max(
+        state?.snapshotAt ?? 0,
+        token.holdersSnapshotAt,
+      ),
       snapshotSlot: token.holdersSnapshotSlot,
       gravityUpdatedAt: (token.lastGravityMinute ?? 0) * 60_000,
     };
@@ -68,7 +81,7 @@ export class Store {
   /** Internal id of a live token from its public CA; unknown or not live → Not found. */
   liveTokenId(mint: string): number {
     const token = this.repo.tokens.getByMint(mint);
-    if (!token || token.status !== "live") throw new Error("Not found");
+    if (!token || token.status !== "live" || !tokenVisible(token)) throw new Error("Not found");
     return token.id;
   }
   token(id: number) {
@@ -80,7 +93,7 @@ export class Store {
   listLive() {
     return this.repo.tokens
       .all()
-      .filter((x) => x.status === "live" && !isTokenToken(x))
+      .filter((x) => x.status === "live" && !isTokenToken(x) && tokenVisible(x))
       .map((x) => this.view(x));
   }
   listWork() {
