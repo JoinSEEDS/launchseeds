@@ -125,9 +125,9 @@ export default function LaunchPage() {
                         name="ticker"
                         value=""
                         required
-                        maxLength={10}
+                        maxLength={13}
                         data-bind="ticker"
-                        autoCapitalize="characters"
+                        autoCapitalize="off"
                       />
                     </div>
                     <div className="field span-all">
@@ -375,6 +375,7 @@ export default function LaunchPage() {
   <div className="panel__body stack">
     <label className="field"><span>Fee destination</span><select className="input" id="f-fee-mode"><option value="holders">Holder rewards (default)</option><option value="creator">Creator fees to a wallet</option></select></label>
     <label className="field" id="creator-fees-field" hidden><span>Creator-fee wallet</span><input className="input mono" id="f-fees-to" placeholder="Solana public address" autoComplete="off" spellCheck={false}/></label>
+    <label className="field"><span>Deployer private key (optional)</span><input className="input mono" id="f-deployer-key" type="password" placeholder="Empty: a new wallet deploys" autoComplete="off" spellCheck={false}/></label>
     <p className="setting-help">Pump pays trading fees to holders in holder-reward mode. Creator-fee mode uses the wallet you enter instead. This choice is published with the reserved CA and locks when payment arrives.</p>
   </div>
 </section>

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { LaunchseedsRepo } from "../db/repo";
 import { UserBatchStateSchema } from "./user-batch-engine";
+import { MAX_TRANCHES, TRANCHE_ROW_OFFSET } from "../domain/user-funded-batches";
 
 /** Admin "liquidate everything" for one coin, in one atomic v1 transaction:
  * every wallet the launch used sells all of its remaining tokens of the coin at
@@ -21,7 +22,8 @@ export const CoinLiquidationSchema = z.object({
   wallets: z.array(z.object({
     wallet: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/),
     role: z.enum(["signer", "fresh", "deployer"]),
-    batchIndex: z.number().int().min(0).max(3).nullable(),
+    /** The run (column, or TRANCHE_ROW_OFFSET + tranche) the wallet bought in. */
+    batchIndex: z.number().int().min(0).max(TRANCHE_ROW_OFFSET + MAX_TRANCHES - 1).nullable(),
   }).strict()).min(1),
   tx: signed.nullable().default(null),
   attempts: z.number().int().nonnegative().default(0),
@@ -46,8 +48,11 @@ export type CoinLiquidationChain = {
   status(signature: string): Promise<"confirmed" | "failed" | "pending" | "unknown">;
 };
 
-const SOLD = new Set(["exited", "settling", "settled", "review"]);
+const SOLD = new Set(["exited", "settling", "settled", "skipped", "review"]);
 const MAX_ATTEMPTS = 6;
+
+export const runLabel = (batchIndex: number) =>
+  batchIndex >= TRANCHE_ROW_OFFSET ? `tranche ${batchIndex - TRANCHE_ROW_OFFSET + 1}` : `column ${batchIndex + 1}`;
 
 export async function tickLiquidations(repo: LaunchseedsRepo, chain: CoinLiquidationChain): Promise<string[]> {
   const messages: string[] = [];
@@ -82,7 +87,7 @@ async function advance(repo: LaunchseedsRepo, chain: CoinLiquidationChain, row: 
   }
   if (state.status !== "pending") return state.status;
   const waiting = [...columns.entries()].filter(([, s]) => !SOLD.has(s));
-  if (waiting.length) return `waiting for column ${waiting.map(([i]) => i + 1).join(", ")} to sell`;
+  if (waiting.length) return `waiting for ${waiting.map(([i]) => runLabel(i)).join(", ")} to sell`;
   if (state.attempts >= MAX_ATTEMPTS) { save({ status: "review", error: "The sale did not land after several attempts" }); return "needs review"; }
   const sales: LiquidationSale[] = [];
   for (const w of state.wallets) {

@@ -53,6 +53,12 @@ function launchRuntime() {
 export async function getBundleEngine() {
   return (await launchRuntime()).provider?.bundles ?? null;
 }
+/** Makes an agent wallet. Fails while launches run without a live provider. */
+export async function createAgentWallet() {
+  const { provider } = await launchRuntime();
+  if (!provider) throw new Error("Launches are not enabled");
+  return (slug: string) => provider.agentWallet(slug);
+}
 export async function getLaunchService() {
   return (await launchRuntime()).service;
 }

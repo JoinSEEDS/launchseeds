@@ -90,6 +90,9 @@ export function tokenRepo(db: SqlDb) {
     getByFundingWallet(wallet: string) {
       return record(db, "tokens", "fundingWallet = ?", wallet);
     },
+    byFundingWalletName(name: string) {
+      return records(db, "tokens", "fundingWalletName = ?", name);
+    },
     /** Launches whose wallets and metadata are not prepared yet. */
     preparing() {
       return records(db, "tokens", "status = 'preparing' ORDER BY createdAt");
@@ -171,6 +174,10 @@ export function tokenRepo(db: SqlDb) {
     /** Preparation lease, retry counters and stored launch inputs. */
     updateLaunch(id: number, patch: Partial<Token>) {
       return patchById(db, "tokens", id, patch, LAUNCH_PATCH);
+    },
+    /** funding → expired: an own-wallet launch that missed its time. */
+    expireFunding(id: number) {
+      return transition(db, "tokens", id, "funding", "expired", {}, []);
     },
     /** preparing → funding once wallets, metadata and quote exist. */
     markPrepared(id: number, patch: Partial<Token>) {

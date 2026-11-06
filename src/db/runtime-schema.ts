@@ -3,7 +3,8 @@ import { Id, RowId, Time, Address } from "./schema";
 export const runtimeSchemas = {
   userBatchRuns: z.object({
     tokenId: RowId,
-    batchIndex: z.number().int().min(0).max(3),
+    /** 0–3: the launch bundle's columns; 4–9: post-launch tranches. */
+    batchIndex: z.number().int().min(0).max(9),
     active: z.boolean().default(true),
     stateJson: z.string(),
     revision: z.number().int().nonnegative().default(0),

@@ -12,7 +12,8 @@ import { ed25519VoteVerifier } from "../../../../../src/integrations/ed25519";
 import { address } from "../../../../../src/shared/domain";
 import { adminWallets } from "../../../../../src/server/admin-wallets";
 import { UserBatchStateSchema } from "../../../../../src/server/user-batch-engine";
-import { CoinLiquidationSchema } from "../../../../../src/server/coin-liquidation";
+import { CoinLiquidationSchema, runLabel } from "../../../../../src/server/coin-liquidation";
+import { TRANCHE_ROW_OFFSET } from "../../../../../src/domain/user-funded-batches";
 import { parseBundleIntent, type BundleBuyer } from "../../../../../src/server/launch-bundle";
 import { storedLaunchSettings } from "../../../../../src/domain/launch-settings";
 
@@ -51,8 +52,9 @@ export async function POST(
     const results: string[] = [];
     for (const row of store.repo.userBatches.byToken(token.id)) {
       const state = UserBatchStateSchema.parse(JSON.parse(row.stateJson));
-      const column = `Column ${row.batchIndex + 1}`;
+      const label = runLabel(row.batchIndex), column = label[0]!.toUpperCase() + label.slice(1);
       if (state.status === "settled") { results.push(`${column}: already paid out`); continue; }
+      if (state.status === "skipped") { results.push(`${column}: skipped, never bought`); continue; }
       if (state.forced) { results.push(`${column}: already finalizing (${state.status})`); continue; }
       // A holding column's prepared sale was never sent (it is sent only after
       // the switch to exiting); drop it so the next one has no profit minimum.
@@ -86,7 +88,7 @@ function startLiquidation(store: ReturnType<typeof getStore>, token: { id: numbe
   if (!plan || !intent || !destination) return "Liquidate everything: only user-funded column launches are supported";
   const buyers = JSON.parse(plan.buyersJson) as BundleBuyer[];
   const wallets = [
-    ...buyers.map((b) => ({ wallet: b.wallet, role: b.role === "signer" ? ("signer" as const) : ("fresh" as const), batchIndex: b.batchIndex ?? 0 })),
+    ...buyers.map((b) => ({ wallet: b.wallet, role: b.role === "signer" ? ("signer" as const) : ("fresh" as const), batchIndex: b.tranche !== undefined ? TRANCHE_ROW_OFFSET + b.tranche : b.batchIndex ?? 0 })),
     ...(intent.fundingWallet ? [{ wallet: intent.fundingWallet, role: "deployer" as const, batchIndex: null }] : []),
   ];
   const state = CoinLiquidationSchema.parse({ version: 2, mint: token.mint, destination, requestedBy: by, status: "pending", wallets });

@@ -22,6 +22,7 @@ import { packRepo } from "./packs";
 import { cardRepo } from "./cards";
 import { tokenBuybackRepo } from "./token-buybacks";
 import { freeLaunchRepo } from "./free-launches";
+import { agentRepo } from "./agents";
 import { drawRepo } from "./draws";
 import { stockWinRepo } from "./stock-wins";
 import { marketMakerRepo } from "./market-maker";
@@ -51,6 +52,7 @@ export function createRepo(db: LaunchseedsDatabase) {
     cards: cardRepo(db),
     tokenBuybacks: tokenBuybackRepo(db),
     freeLaunches: freeLaunchRepo(db),
+    agents: agentRepo(db),
     draws: drawRepo(db),
     stockWins: stockWinRepo(db),
     marketMaker: marketMakerRepo(db),

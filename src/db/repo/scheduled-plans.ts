@@ -5,6 +5,9 @@ export function scheduledPlansRepo(db: SqlDb) {
     byHash(planHash: string) {
       return db.scheduledPlans.select().where({ planHash }).get() ?? null;
     },
+    all() {
+      return db.scheduledPlans.select().orderBy("id", "asc").all();
+    },
     byToken(tokenId: number) {
       return db.scheduledPlans.select().where({ tokenId }).get() ?? null;
     },

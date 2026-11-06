@@ -3,6 +3,8 @@ export function userBatchesRepo(db: SqlDb) {
   return {
     byToken(tokenId: number) { return db.userBatchRuns.select().where({tokenId}).orderBy("batchIndex","asc").all(); },
     all() { return db.userBatchRuns.select().where({active:true}).orderBy("id","asc").all(); },
+    /** Every run, finished ones included. */
+    everyRun() { return db.userBatchRuns.select().orderBy("id","asc").all(); },
     liquidation(tokenId:number) { return db.coinLiquidations.select().where({tokenId}).get() ?? null; },
     activeLiquidations() { return db.coinLiquidations.select().where({active:true}).orderBy("id","asc").all(); },
     startLiquidation(tokenId:number, stateJson:string, now:number) {
@@ -30,7 +32,7 @@ export function userBatchesRepo(db: SqlDb) {
           if(existing&&existing.signedJson!==signedJson)throw Error("Signed batch attempt changed bytes");
           if(!existing)db.userBatchAttempts.insert({batchRunId:id,kind,signature:record.signature,signedJson,preparedAt:now});
         }
-        return db.userBatchRuns.select().where({id,revision}).updateAll({stateJson,revision:revision+1,updatedAt:now,active:state.status!=="settled"&&(state.status!=="review"||state.forced===true)}) > 0;
+        return db.userBatchRuns.select().where({id,revision}).updateAll({stateJson,revision:revision+1,updatedAt:now,active:state.status!=="settled"&&state.status!=="skipped"&&(state.status!=="review"||state.forced===true)}) > 0;
       });
     },
   };

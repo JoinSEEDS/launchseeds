@@ -37,7 +37,7 @@ export async function POST(request: Request): Promise<Response> {
       );
     const body = await readBoundedJson<Record<string, unknown>>(request, 1024);
     const name = clean(body.name, 32);
-    const symbol = clean(body.symbol, 10).toUpperCase();
+    const symbol = clean(body.symbol, 13);
     if (!name) throw new ApiError("Enter a token name first.");
     if (waiting >= MAX_WAITING)
       throw new ApiError(

@@ -2,11 +2,12 @@ import { PublicKey, SystemProgram, type TransactionInstruction } from "@solana/w
 import { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, createTransferCheckedInstruction, createCloseAccountInstruction, getMint } from "@solana/spl-token";
 import bs58 from "bs58";
 import type { LaunchseedsRepo } from "../db/repo";
-import type { UserBatchChain, UserBatchState } from "./user-batch-engine";
+import { saleBuyers, type UserBatchChain, type UserBatchState } from "./user-batch-engine";
+import { floorSaleMinimum } from "../domain/user-funded-batches";
 import type { CoinLiquidationChain } from "./coin-liquidation";
 import type { BundleContext, PreparedExit } from "./launch-bundle-solard";
 import { simulateRaw } from "./launch-bundle-solard";
-import { parseBundleIntent, V1_PACKET_LIMIT } from "./launch-bundle";
+import { BUYER_RESERVE_LAMPORTS, parseBundleIntent, V1_PACKET_LIMIT } from "./launch-bundle";
 import { rpcFetch } from "./rpc-pacing";
 import { loadWireTransaction } from "./solard-sdk";
 
@@ -15,17 +16,24 @@ type Receipt = {
   meta:{err:unknown;fee:number;preBalances:number[];postBalances:number[];preTokenBalances?:TokenBalance[];postTokenBalances?:TokenBalance[]};
 };
 type TokenBalance = {accountIndex:number;owner?:string;mint:string;uiTokenAmount:{amount:string}};
-type Market = {baseTokenProgram:PublicKey;quoteAsset:{kind:string}};
+type Market = {baseTokenProgram:PublicKey;quoteAsset:{kind:string};metadata?:{curve?:Reserves;reserves?:Reserves}};
+type Reserves = {virtualBase:bigint;virtualQuote:bigint};
 type Quote = {inputRaw:bigint;minimumOutputRaw:bigint;expectedOutputRaw:bigint;meta?:Record<string,unknown>};
 type Plugin = {
   resolveMarket(context:unknown):Promise<Market|null>;
   quoteSell(context:unknown,market:Market,amount:bigint,slippage:number):Promise<Quote>;
+  quoteBuy(context:unknown,market:Market,amount:{raw:bigint;asset:unknown},slippage:number):Promise<Quote>;
+  buildBuy(context:unknown,market:Market,quote:Quote):Promise<{instructions:TransactionInstruction[]}>;
   buildSell(context:unknown,market:Market,quote:Quote):Promise<{instructions:TransactionInstruction[];minOutputRaw?:bigint}>;
 };
 const FEE_CAP = 100_000n;
 
 /** Native-SOL Pump and PumpSwap batch execution using Solard's venue builders. */
-export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,loadToken:(mint:string)=>Promise<unknown>):UserBatchChain&{liquidation:CoinLiquidationChain} {
+export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,loadToken:(mint:string)=>Promise<unknown>,solUsd:()=>Promise<number>):UserBatchChain&{liquidation:CoinLiquidationChain} {
+  async function pump(){
+    const moduleName:string="@solard/core/venues/pump/pump-plugin.ts";
+    return new ((await import(moduleName)) as {PumpPlugin:new()=>Plugin}).PumpPlugin();
+  }
   async function rpc(method:string,params:unknown[]) {
     const response=await rpcFetch(ctx.rpcUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method,params}),signal:AbortSignal.timeout(10_000)});
     const body=await response.json() as {result?:unknown;error?:unknown};
@@ -86,8 +94,12 @@ export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,load
     async fills(tokenId,batchIndex,state){
       const token=repo.tokens.get(tokenId),intent=parseBundleIntent(token?.intent);
       if(token?.status!=="live"||!intent)return null;
-      const value=await receipt(intent.signatures[batchIndex+1]!);if(!value)return null;
-      let cost=0n;
+      const tranche=state.tranche!==undefined;
+      if(tranche&&(!state.buy||!intent.fundingWallet))return null;
+      const value=await receipt(tranche?state.buy!.signature:intent.signatures[batchIndex+1]!);if(!value)return null;
+      // A tranche's deposit wallet funds its wallets in the same transaction and
+      // pays its fee: those transfers net out and the fee joins the cost.
+      let cost=tranche?-accountDelta(value,intent.fundingWallet!):0n;
       const fills=state.buyers.map(buyer=>{
         cost-=accountDelta(value,buyer.wallet);
         const amount=(rows:TokenBalance[]=[])=>rows.filter(row=>row.mint===state.mint&&row.owner===buyer.wallet).reduce((sum,row)=>sum+BigInt(row.uiTokenAmount.amount),0n);
@@ -100,10 +112,42 @@ export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,load
       });
       return {fills,cost};
     },
-    async prepareSale(state,minimumOutput){
+    async marketCapUsd(mint){
+      const plugin=await pump(),context={connection:ctx.connection,token:await loadToken(mint),user:new PublicKey(mint)};
+      const market=await plugin.resolveMarket(context);
+      const reserves=market?.metadata?.curve??market?.metadata?.reserves;
+      if(!market||market.quoteAsset.kind!=="native-sol"||!reserves||reserves.virtualBase<=0n)throw Error("Market cap needs a native SOL Pump market");
+      const supply=(await getMint(ctx.connection,new PublicKey(mint),"confirmed",market.baseTokenProgram)).supply;
+      return Number(reserves.virtualQuote*supply/reserves.virtualBase)/1e9*await solUsd();
+    },
+    async prepareTrancheBuy(tokenId,state){
+      const intent=parseBundleIntent(repo.tokens.get(tokenId)?.intent);
+      if(!intent?.fundingWallet||state.tranche===undefined||!("trigger" in state.config))throw Error("Tranche buy needs the launch's deposit wallet");
+      const deposit=new PublicKey(intent.fundingWallet),plugin=await pump(),token=await loadToken(state.mint);
+      const coreName:string="@solard/core";
+      const core=await import(coreName) as {rawAmount(raw:bigint):{raw:bigint;asset:unknown}};
+      const instructions:TransactionInstruction[]=[];
+      let market:Market|null=null;
+      for(const buyer of state.buyers){
+        const owner=new PublicKey(buyer.wallet),budget=BigInt(buyer.budgetLamports);
+        const context={connection:ctx.connection,token,user:owner};
+        market??=await plugin.resolveMarket(context);
+        if(!market||market.quoteAsset.kind!=="native-sol")throw Error("Tranche requires a native SOL Pump market");
+        instructions.push(SystemProgram.transfer({fromPubkey:deposit,toPubkey:owner,lamports:budget+BigInt(BUYER_RESERVE_LAMPORTS)}));
+        const quote=await plugin.quoteBuy(context,market,core.rawAmount(budget),state.config.slippageBps);
+        instructions.push(...(await plugin.buildBuy(context,market,quote)).instructions);
+        // The next wallet buys after this one: quote it on the moved reserves.
+        const reserves=market.metadata?.curve??market.metadata?.reserves;
+        if(!reserves)throw Error("Tranche market reserves are unavailable");
+        reserves.virtualQuote+=budget;reserves.virtualBase-=quote.expectedOutputRaw;
+      }
+      return (await compile(intent.fundingWallet,[intent.fundingWallet,...state.buyers.map(b=>b.wallet)],instructions,1_400_000)).signed;
+    },
+    async prepareSale(state,requiredOutput,floorUsd){
       const moduleName:string="@solard/core/venues/pump/pump-plugin.ts";
       const {PumpPlugin}=await import(moduleName) as {PumpPlugin:new()=>Plugin};
-      const plugin=new PumpPlugin(),seller=state.buyers[0]!.wallet,mint=new PublicKey(state.mint);
+      const sellers=saleBuyers(state);
+      const plugin=new PumpPlugin(),seller=sellers[0]!.wallet,mint=new PublicKey(state.mint);
       const context={connection:ctx.connection,token:await loadToken(state.mint),user:new PublicKey(seller)};
       const market=await plugin.resolveMarket(context);
       if(!market||market.quoteAsset.kind!=="native-sol")throw Error("Batch requires a native SOL Pump market");
@@ -118,18 +162,26 @@ export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,load
       };
       if(state.forced)instructions.push(createAssociatedTokenAccountIdempotentInstruction(new PublicKey(seller),sellerAccount,new PublicKey(seller),mint,market.baseTokenProgram));
       let total=0n;
-      for(const [index,buyer] of state.buyers.entries()){
-        const recorded=BigInt(state.fills[index]!);
+      for(const buyer of sellers){
+        const recorded=BigInt(state.fills[state.buyers.indexOf(buyer)]!);
         const fill=state.forced?(await held(buyer.wallet)<recorded?await held(buyer.wallet):recorded):recorded;
         total+=fill;
-        if(index&&fill>0n)instructions.push(createTransferCheckedInstruction(getAssociatedTokenAddressSync(mint,new PublicKey(buyer.wallet),false,market.baseTokenProgram),mint,sellerAccount,new PublicKey(buyer.wallet),fill,metadata.decimals,[],market.baseTokenProgram));
+        if(buyer.wallet!==seller&&fill>0n)instructions.push(createTransferCheckedInstruction(getAssociatedTokenAddressSync(mint,new PublicKey(buyer.wallet),false,market.baseTokenProgram),mint,sellerAccount,new PublicKey(buyer.wallet),fill,metadata.decimals,[],market.baseTokenProgram));
       }
       if(total===0n)throw Error("Nothing left to sell in this column");
-      const quote=await plugin.quoteSell(context,market,total,minimumOutput===null?500:0);
+      const limited=requiredOutput!==null||floorUsd!==undefined;
+      const quote=await plugin.quoteSell(context,market,total,limited?0:500);
+      let minimumOutput=requiredOutput;
+      if(floorUsd!==undefined){
+        const reserves=market.metadata?.curve??market.metadata?.reserves;
+        if(!reserves)throw Error("Floor sale needs the market's reserves");
+        minimumOutput=floorSaleMinimum({...reserves,supply:metadata.supply,sellRaw:total,floorLamports:floorUsd/await solUsd()*1e9});
+        if(minimumOutput===null)throw Error("This sale is too large to clear its market cap floor");
+      }
       if(minimumOutput!==null){quote.minimumOutputRaw=minimumOutput;quote.meta={...quote.meta,absoluteMinimumOutputRaw:String(minimumOutput),preparedLimitOrder:true};}
       const built=await plugin.buildSell(context,market,quote);
       if(minimumOutput!==null&&(built.minOutputRaw===undefined||built.minOutputRaw<minimumOutput))throw Error("Venue did not enforce the combined batch minimum");
-      const {signed}=await compile(seller,state.buyers.map(buyer=>buyer.wallet),[...instructions,...built.instructions],600_000);
+      const {signed}=await compile(seller,sellers.map(buyer=>buyer.wallet),[...instructions,...built.instructions],600_000);
       return signed;
     },
     needsRefresh:async height=>(await ctx.connection.getBlockHeight("confirmed"))>=height-20,
@@ -150,7 +202,8 @@ export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,load
     async saleReceipt(state){
       if(!state.sale)throw Error("Batch sale signature missing");
       const value=await receipt(state.sale.signature);if(!value)return null;
-      return state.buyers.reduce((sum,buyer)=>sum+accountDelta(value,buyer.wallet),0n);
+      // A ladder sale holds only the wallet it sold.
+      return state.buyers.filter(buyer=>value.transaction.message.accountKeys.includes(buyer.wallet)).reduce((sum,buyer)=>sum+accountDelta(value,buyer.wallet),0n);
     },
     async preparePayout(state){
       const payer=state.buyers[0]!.wallet,destination=new PublicKey(state.proceedsWallet),mint=new PublicKey(state.mint);

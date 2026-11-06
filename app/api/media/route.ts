@@ -2,7 +2,8 @@ import {
   MAX_TOKEN_IMAGE_BYTES,
   TOKEN_IMAGE_SIZE_ERROR,
 } from "../../../lib/media-policy";
-import { requireSameOrigin, ApiError } from "../../../lib/api-security";
+import { ApiError } from "../../../lib/api-security";
+import { requireAgentOrigin } from "../../../src/server/agents/agent-origin";
 import { IngressRateLimiter } from "../../../lib/trusted-client";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile, readdir } from "node:fs/promises";
@@ -33,7 +34,7 @@ function actualMime(buf: Uint8Array) {
 }
 export async function POST(req: Request) {
   try {
-    requireSameOrigin(req);
+    requireAgentOrigin(req);
   } catch (error) {
     return Response.json(
       {

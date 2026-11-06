@@ -16,6 +16,7 @@ function fixture(){
   absentAfterExpiry:async()=>absent,saleReceipt:async()=>saleReceipt,
   preparePayout:async state=>{expect(state.proceedsWallet).toBe("3".repeat(32));return signed("payout");},
   payoutReceipt:async()=>payoutReceipt,
+  marketCapUsd:async()=>0,prepareTrancheBuy:async()=>signed("buy"),
  };
  const state=UserBatchStateSchema.parse({version:1,status:"buying",config:{slots:[500_000_000,500_000_000],exit:{kind:"profit",profitBps:200}},proceedsWallet:"3".repeat(32),mint:token.mint,buyers:[{name:"ace",wallet:"4".repeat(32),budgetLamports:"500000000",batchIndex:0,role:"signer"},{name:"b",wallet:"5".repeat(32),budgetLamports:"500000000",batchIndex:0,role:"fresh"}]});
  store.repo.userBatches.insert(token.id,0,JSON.stringify(state),Date.now());
@@ -70,4 +71,47 @@ test("a sale that fails on chain returns to holding, its fee added to the cost t
   f.chain.prepareSale=async(_s,minimum)=>{expect(minimum).toBe(1020160200n);return {transaction:"sale-retry",signature:"sale-retry",lastValidBlockHeight:100};};
   await engine.tick();expect(f.read().sale!.signature).toBe("sale-retry");
  }finally{f.store.close();}
+});
+function trancheFixture(trigger:Record<string,unknown>){
+ const store=new Store(openLaunchseedsData(":memory:")),launchedAt=1_000_000,token=insertToken(store,{mint:"2".repeat(32),launchedAt});
+ let now=launchedAt,mcap=0,status:"confirmed"|"failed"|"pending"|"unknown"="unknown",fills:{fills:bigint[];cost:bigint}|null=null,count=0;
+ const sent:string[]=[];
+ const chain:UserBatchChain={sellFeeCap:0n,settlementFeeCap:0n,
+  fills:async(_t,_b,state)=>{expect(state.buy).not.toBeNull();return fills;},
+  prepareSale:async()=>({transaction:"sale",signature:"sale",lastValidBlockHeight:100}),
+  needsRefresh:async()=>false,simulate:async()=>null,send:async transaction=>{sent.push(transaction);},
+  status:async()=>status,failedFee:async()=>null,absentAfterExpiry:async()=>false,saleReceipt:async()=>null,
+  preparePayout:async()=>({transaction:"payout",signature:"payout",lastValidBlockHeight:100}),payoutReceipt:async()=>null,
+  marketCapUsd:async()=>mcap,prepareTrancheBuy:async()=>{count++;return {transaction:"buy"+count,signature:"buy"+count,lastValidBlockHeight:100};},
+ };
+ const state=UserBatchStateSchema.parse({version:1,status:"waiting",tranche:0,config:{slots:[50_000_000],trigger,exit:{kind:"immediate"}},proceedsWallet:"3".repeat(32),mint:token.mint,buyers:[{name:"t",wallet:"5".repeat(32),budgetLamports:"50000000",tranche:0,role:"fresh"}]});
+ store.repo.userBatches.insert(token.id,4,JSON.stringify(state),Date.now());
+ const read=()=>UserBatchStateSchema.parse(JSON.parse(store.repo.userBatches.byToken(token.id)[0]!.stateJson));
+ const engine=new UserBatchEngine(store.repo,chain,()=>now);
+ return {store,engine,sent,read,at:(ms:number)=>{now=launchedAt+ms;},mcap:(v:number)=>{mcap=v;},status:(v:typeof status)=>{status=v;},fill:(v:typeof fills)=>{fills=v;}};
+}
+test("a delayed tranche buys once its time comes, retries an unlanded buy, then holds",async()=>{
+ const f=trancheFixture({kind:"delay",seconds:5});try{
+  f.at(4_000);await f.engine.tick();expect(f.read().status).toBe("waiting");expect(f.sent).toEqual([]);
+  f.at(5_000);await f.engine.tick();expect(f.read().status).toBe("buying");expect(f.read().buy!.signature).toBe("buy1");expect(f.sent).toEqual(["buy1"]);
+  f.status("failed");await f.engine.tick();expect(f.read().status).toBe("waiting");expect(f.read().buy).toBeNull();
+  f.status("unknown");await f.engine.tick();expect(f.read().buy!.signature).toBe("buy2");expect(f.read().buyAttempts).toBe(2);
+  f.fill({fills:[10n],cost:50_005_000n});await f.engine.tick();expect(f.read().status).toBe("holding");expect(f.read().buyCostLamports).toBe("50005000");
+ }finally{f.store.close();}
+});
+test("a market-cap tranche waits for its level and is skipped past its window or when finalized",async()=>{
+ const f=trancheFixture({kind:"mcap",usd:50_000,withinSeconds:600});try{
+  f.mcap(40_000);await f.engine.tick();expect(f.read().status).toBe("waiting");
+  f.mcap(55_000);await f.engine.tick();expect(f.read().status).toBe("buying");
+ }finally{f.store.close();}
+ const g=trancheFixture({kind:"mcap",usd:50_000,direction:"below",withinSeconds:600});try{
+  g.mcap(60_000);await g.engine.tick();expect(g.read().status).toBe("waiting");
+  g.at(601_000);await g.engine.tick();expect(g.read().status).toBe("skipped");expect(g.sent).toEqual([]);
+  await g.engine.tick();expect(g.read().status).toBe("skipped");
+ }finally{g.store.close();}
+ const h=trancheFixture({kind:"delay",seconds:60});try{
+  const row=h.store.repo.userBatches.byToken(1)[0]??h.store.repo.userBatches.everyRun()[0]!;
+  h.store.repo.userBatches.save(row.id,row.revision,JSON.stringify({...h.read(),forced:true}),Date.now());
+  await h.engine.tick();expect(h.read().status).toBe("skipped");expect(h.sent).toEqual([]);
+ }finally{h.store.close();}
 });

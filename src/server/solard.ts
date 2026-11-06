@@ -21,6 +21,8 @@ import { createMeasure } from "measure-fn";
 import { safeInteger, positive } from "../shared/domain";
 import type { LaunchProvider } from "./launch";
 import { Store } from "./store";
+import { Database } from "bun:sqlite";
+import { isOwnDeployer } from "./own-deployer";
 import { createRpcConnection, rpcFetch } from "./rpc-pacing";
 import { lastKnownSolUsd, rememberSolUsd } from "./sol-price";
 import {
@@ -30,13 +32,15 @@ import {
 import { BundleEngine } from "./bundle-engine";
 import { UserBatchEngine, UserBatchStateSchema } from "./user-batch-engine";
 import { createUserBatchChain } from "./user-batch-solard";
+import { TRANCHE_ROW_OFFSET } from "../domain/user-funded-batches";
+import { assignFreshWallets, busyLaunchWallets, settledFreshWallets, slotKey } from "./launch-wallets";
 import { storedLaunchSettings } from "../domain/launch-settings";
 import { scheduledCommitment } from "../domain/scheduled-plan";
 import { hash } from "../shared/domain";
 import { createBundleChain } from "./bundle-chain-solard";
 import { BundleRewardEngine } from "./bundle-reward";
 import { createRewardChain } from "./bundle-reward-solard";
-import { bundleWalletName } from "./launch-bundle";
+import { bundleWalletName, type BundleBuyer } from "./launch-bundle";
 import { poolWallets, reuseWalletPool } from "./wallet-pool";
 import {
   assertProtectionBudget,
@@ -303,7 +307,7 @@ export class SolardLaunchProvider implements LaunchProvider {
         provider.batchEngine = new UserBatchEngine(store.repo,createUserBatchChain(provider.bundleContext,store.repo,async mint=>{
           await provider.sdk.addToken(mint);
           return (provider.sdk as unknown as {resolveToken(mint:string):unknown}).resolveToken(mint);
-        }));
+        },solUsd));
         provider.bundles.userBatches=provider.batchEngine;
       }
       // Profitable sales buy their coin back for a $TOKEN holder.
@@ -330,7 +334,7 @@ export class SolardLaunchProvider implements LaunchProvider {
     const mint=input.token.mintSignerRef?.replace(/^launchseeds-mint-/,"");if(!mint)throw Error("Reserved mint missing");
     // Compile the real creation and grouped buys before publishing payment.
     // These unsent validation bytes are never returned to the browser.
-    await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint,metadata:{name:input.token.name,symbol:input.token.symbol,uri:input.metadataUri},devBuyLamports:input.settings.bundleLamports!,buyers:input.buyers,userFunded:true,...(input.settings.feesTo?{feesTo:input.settings.feesTo}:{})});
+    await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint,metadata:{name:input.token.name,symbol:input.token.symbol,uri:input.metadataUri},devBuyLamports:input.settings.bundleLamports!,buyers:input.buyers.filter(b=>b.tranche===undefined),userFunded:true,...(input.settings.feesTo?{feesTo:input.settings.feesTo}:{})});
   }
   bundleContext: BundleContext | null = null;
   checkProtectionBudget(
@@ -420,6 +424,8 @@ export class SolardLaunchProvider implements LaunchProvider {
       if (!mintSignerRef) throw new Error("Launch mint keypair is missing");
       walletName = `launchseeds-${this.walletAddress(mintSignerRef)}`;
     }
+    // An own wallet's key was stored at creation; never swap in a new wallet.
+    if (isOwnDeployer(walletName) && !this.sdk.listWallets().some((w) => w.name === walletName)) throw new ApiError("This launch's wallet key is gone. Start a new launch.", 409);
     const wallet = this.findOrCreateWallet(walletName);
     return {
       fundingWallet: wallet.address,
@@ -432,6 +438,10 @@ export class SolardLaunchProvider implements LaunchProvider {
   }
   /** Wallet names are the idempotency key. After a racing create failure,
    * re-read the persisted wallet rather than generating a different address. */
+  /** An agent's own wallet. Its key stays in the wallet store, never in agent context. */
+  agentWallet(slug: string) {
+    return this.findOrCreateWallet(`agent-${slug}`).address;
+  }
   private findOrCreateWallet(name: string) {
     const existing = this.sdk.listWallets().find((item) => item.name === name);
     if (existing) return existing;
@@ -570,7 +580,26 @@ export class SolardLaunchProvider implements LaunchProvider {
       return funded;
     });
   }
-  async deposits(_tokenId: number, fundingWallet: string) {
+  rememberDeployer(keypair: Keypair, name: string) {
+    const address = keypair.publicKey.toBase58();
+    const known = this.sdk.listWallets().find((w) => w.address === address);
+    if (known && known.name !== name) throw new ApiError("This wallet can't be used. Use another one.", 400);
+    if (!known) this.sdk.importWallet(JSON.stringify([...keypair.secretKey]), name);
+  }
+  forgetWallet(name: string) {
+    if (!isOwnDeployer(name)) throw new Error("Only a launcher's wallet can be forgotten");
+    const db = new Database(process.env.SOLARD_DB_PATH || "./data/solard.sqlite");
+    try { db.query("DELETE FROM wallets WHERE name = ?").run(name); } finally { db.close(); }
+  }
+  /** An own wallet pays from what it holds, whenever it came. */
+  private async ownWalletPayment(tokenId: number, fundingWallet: string, required: bigint) {
+    const context = await this.connection.getBalanceAndContext(new PublicKey(fundingWallet), "finalized");
+    if (required <= 0n || BigInt(context.value) < required) return [];
+    return [{ signature: `balance-${tokenId}`, lamports: safeInteger(Number(required)), confirmedAt: Date.now(), confirmedSlot: context.context.slot, sender: fundingWallet }];
+  }
+  async deposits(tokenId: number, fundingWallet: string) {
+    const token = this.store.repo.tokens.get(tokenId);
+    if (isOwnDeployer(token?.fundingWalletName)) return this.ownWalletPayment(tokenId, fundingWallet, BigInt(token!.requiredLamports));
     const signatures = await this.connection.getSignaturesForAddress(
       new PublicKey(fundingWallet),
       { limit: 100 },
@@ -616,18 +645,50 @@ export class SolardLaunchProvider implements LaunchProvider {
   }
   /** Column launches: each column's first slot is a distinct, reused pool
    * wallet (LAUNCHSEEDS_REUSE_WALLETS, rotating by mint) that signs and pays that
-   * column's transactions; every other slot is a wallet made for this launch.
-   * The funding (deposit) wallet is never a pool wallet. */
-  planColumns(mintSignerRef: string, columns: bigint[][]) {
-    const mint = mintSignerRef.replace(/^launchseeds-mint-/, "");
+   * column's transactions. Every other slot, and every tranche wallet, is a
+   * fresh wallet: reused from a finished launch when one is free (see
+   * launch-wallets.ts), else made for this launch. The funding (deposit)
+   * wallet is never a pool wallet. */
+  planColumns(token: { id: number; mintSignerRef: string; fundingWallet?: string | null }, columns: bigint[][], tranches: bigint[][] = []) {
+    const mint = token.mintSignerRef.replace(/^launchseeds-mint-/, "");
     const pool = reuseWalletPool();
     if (pool.length < columns.length)
       throw new Error(`Column launches need ${columns.length} signing wallets in LAUNCHSEEDS_REUSE_WALLETS (have ${pool.length})`);
     const signers = poolWallets(mint, pool, columns.length);
-    return columns.flatMap((slots, batchIndex) => slots.map((budget, slot) => {
-      const name = slot === 0 ? signers[batchIndex]! : `${bundleWalletName(mint, batchIndex)}-${slot}`;
-      return { batchIndex, role: slot === 0 ? "signer" as const : "fresh" as const, name, wallet: this.walletFor(name).address, budgetLamports: budget.toString() };
-    }));
+    const saved = this.store.repo.scheduledPlans.byToken(token.id);
+    const previous = new Map<string, { name: string; wallet: string }>();
+    if (saved) {
+      const counts = new Map<string, number>();
+      for (const b of JSON.parse(saved.buyersJson) as BundleBuyer[]) {
+        const group = b.tranche !== undefined ? `t${b.tranche}` : `c${b.batchIndex ?? 0}`;
+        const slot = counts.get(group) ?? 0;
+        counts.set(group, slot + 1);
+        if (b.role === "fresh") previous.set(slotKey(b, slot), { name: b.name, wallet: b.wallet });
+      }
+    }
+    const slots = [
+      ...columns.flatMap((budgets, batchIndex) => budgets.map((budget, slot) => ({ batchIndex, slot, budget, key: slotKey({ batchIndex }, slot), fallbackName: `${bundleWalletName(mint, batchIndex)}-${slot}` }))),
+      ...tranches.flatMap((budgets, tranche) => budgets.map((budget, slot) => ({ tranche, slot, budget, key: slotKey({ tranche }, slot), fallbackName: `launchseeds-bundle-${mint}-t${tranche}-${slot}` }))),
+    ];
+    const signerAddresses = new Set(pool.map((name) => this.walletFor(name).address));
+    const chosen = assignFreshWallets({
+      slots: slots.filter((s) => !("batchIndex" in s) || s.slot > 0),
+      previous,
+      // Only wallets whose key this store holds under the recorded name.
+      reusable: (() => { const known = new Map((this.sdk as unknown as TraderClient).listWallets().map((w) => [w.name, w.address])); return settledFreshWallets(this.store.repo).filter((w) => known.get(w.name) === w.wallet); })(),
+      busy: busyLaunchWallets(this.store.repo, token.id),
+      exclude: new Set([...signerAddresses, ...(token.fundingWallet ? [token.fundingWallet] : [])]),
+    });
+    return slots.map((s): BundleBuyer => {
+      const budgetLamports = s.budget.toString();
+      if ("batchIndex" in s && s.slot === 0) {
+        const name = signers[s.batchIndex!]!;
+        return { batchIndex: s.batchIndex, role: "signer", name, wallet: this.walletFor(name).address, budgetLamports };
+      }
+      const pick = chosen.get(s.key)!;
+      const wallet = pick.wallet ?? this.walletFor(pick.name).address;
+      return { ...("tranche" in s ? { tranche: s.tranche } : { batchIndex: s.batchIndex }), role: "fresh", name: pick.name, wallet, budgetLamports };
+    });
   }
   planBuyers(mintSignerRef: string, budgets: bigint[]) {
     const mint = mintSignerRef.replace(/^launchseeds-mint-/, "");
@@ -665,14 +726,18 @@ export class SolardLaunchProvider implements LaunchProvider {
         if(!plan)throw Error("Published batch plan is missing");
         const buyers=JSON.parse(plan.buyersJson) as import("./launch-bundle").BundleBuyer[];
         if(hash(JSON.stringify(scheduledCommitment(scheduledToken,choices,buyers)))!==plan.planHash)throw Error("Batch commitment does not match execution");
-        const intent=await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint:mintWallet.address,metadata:{name:input.name,symbol:input.symbol,uri:input.metadataUri},devBuyLamports:input.bundleLamports,buyers,userFunded:true,...(choices.feesTo?{feesTo:choices.feesTo}:{})});
+        // Tranche wallets buy after the launch, outside the bundle.
+        const intent=await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint:mintWallet.address,metadata:{name:input.name,symbol:input.symbol,uri:input.metadataUri},devBuyLamports:input.bundleLamports,buyers:buyers.filter(b=>b.tranche===undefined),userFunded:true,...(choices.feesTo?{feesTo:choices.feesTo}:{})});
         this.store.repo.tx(tx=>{
           const existing=tx.userBatches.byToken(input.tokenId);
+          const tranches=choices.userBatches!.tranches??[];
           if(existing.length){
-            if(existing.length!==choices.userBatches!.columns.length||existing.some(row=>JSON.parse(row.stateJson).status!=="buying"))throw Error("Batch execution already advanced; reconcile the saved launch");
+            if(existing.length!==choices.userBatches!.columns.length+tranches.length||existing.some(row=>!["buying","waiting"].includes(JSON.parse(row.stateJson).status)))throw Error("Batch execution already advanced; reconcile the saved launch");
             return;
           }
-          choices.userBatches!.columns.forEach((config,batchIndex)=>tx.userBatches.insert(input.tokenId,batchIndex,JSON.stringify(UserBatchStateSchema.parse({version:1,status:"buying",config,proceedsWallet:choices.userBatches!.proceedsWallet,mint:mintWallet.address,buyers:buyers.filter(buyer=>buyer.batchIndex===batchIndex)})),Date.now()));
+          const common={version:1 as const,proceedsWallet:choices.userBatches!.proceedsWallet,mint:mintWallet.address};
+          choices.userBatches!.columns.forEach((config,batchIndex)=>tx.userBatches.insert(input.tokenId,batchIndex,JSON.stringify(UserBatchStateSchema.parse({...common,status:"buying",config,buyers:buyers.filter(buyer=>buyer.tranche===undefined&&buyer.batchIndex===batchIndex)})),Date.now()));
+          tranches.forEach((config,tranche)=>tx.userBatches.insert(input.tokenId,TRANCHE_ROW_OFFSET+tranche,JSON.stringify(UserBatchStateSchema.parse({...common,status:"waiting",config,tranche,buyers:buyers.filter(buyer=>buyer.tranche===tranche)})),Date.now()));
         });
         return {intent:JSON.stringify(intent),mintSignerRef};
       }

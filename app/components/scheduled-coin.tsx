@@ -16,7 +16,7 @@ const STATUS: Record<string, string> = {
 export function ScheduledCoin({ plan }: { plan: ScheduledLaunchView }) {
   const live = plan.status === "live" && !!plan.mint;
   // The launch's own wallets, named in the trades and gravity tables.
-  const labels = Object.fromEntries(plan.wallets.map((w) => [w.wallet, `C${(w.batchIndex ?? 0) + 1} ${w.role === "signer" ? w.name ?? "signer" : "fresh"}`]));
+  const labels = Object.fromEntries(plan.wallets.map((w) => [w.wallet, w.tranche !== undefined ? `T${w.tranche + 1} fresh` : `C${(w.batchIndex ?? 0) + 1} ${w.role === "signer" ? w.name ?? "signer" : "fresh"}`]));
   return (
     <main className="page coin" data-scheduled-plan={plan.planHash} data-coin-status={plan.status} data-coin-mint={plan.mint ?? ""} data-coin-labels={JSON.stringify(labels)}>
       <header className="coin-head">

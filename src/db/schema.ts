@@ -106,7 +106,7 @@ export const schemas = {
     mint: OptionalAddress,
     mintSignerRef: z.string().nullable(),
     name: z.string().min(1).max(32),
-    symbol: z.string().min(1).max(10),
+    symbol: z.string().min(1).max(13),
     description: z.string(),
     image: z.string(),
     metadataUri: z.string().nullable(),
@@ -321,6 +321,29 @@ export const schemas = {
     signature: z.string().min(1),
     transaction: z.string().min(1),
     lastValidBlockHeight: z.number().int().nonnegative(),
+    createdAt: Time,
+  }),
+  /** Launchable agents: a persona that reads allowed sites and publishes thoughts. No wallet. */
+  agents: z.object({
+    slug: z.string().regex(/^[a-z0-9-]{2,40}$/),
+    name: z.string().min(1).max(40),
+    persona: z.string().min(1).max(600),
+    strategy: z.string().default(""),
+    rulesJson: z.string().default("{}"),
+    walletAddress: Address.nullable().default(null),
+    sitesJson: z.string(),
+    tokenId: RowId.nullable().default(null),
+    active: z.boolean().default(true),
+    nextRunAt: Time,
+    dayKey: z.string().default(""),
+    thoughtsToday: z.number().int().nonnegative().default(0),
+    createdAt: Time,
+  }),
+  agentThoughts: z.object({
+    agentId: RowId,
+    url: z.string().min(1),
+    title: z.string(),
+    thought: z.string().min(1),
     createdAt: Time,
   }),
   /** Pack winners. A draw is made from a frozen, hashed holder snapshot and a
@@ -600,6 +623,8 @@ export type Pack = Tables["packs"];
 export type Card = Tables["cards"];
 export type TokenBuyback = Tables["tokenBuybacks"];
 export type FreeLaunch = Tables["freeLaunches"];
+export type Agent = Tables["agents"];
+export type AgentThought = Tables["agentThoughts"];
 export type Draw = Tables["draws"];
 export type StockWin = Tables["stockWins"];
 export type MmTrade = Tables["mmTrades"];

@@ -43,8 +43,11 @@ export async function POST(request: Request): Promise<Response> {
       LaunchInput & {
         firstStrategy?: unknown;
         settings?: unknown;
+        deployerKey?: unknown;
       }
     >(request, 32_768);
+    const { deployerKey, ...launchRequest } = payload;
+    if (deployerKey !== undefined && typeof deployerKey !== "string") throw new ApiError("Enter a valid private key.", 400);
     let settings;
     try {
       settings = parseLaunchSettings(payload.settings);
@@ -69,12 +72,11 @@ export async function POST(request: Request): Promise<Response> {
     }
     const service = await getLaunchService();
     const status = await service.create(
-      {
-        ...payload,
-      },
+      launchRequest,
       capability,
       undefined,
       settings,
+      deployerKey || undefined,
     );
     notifyLaunchWorker();
     return apiJson(status, 201);

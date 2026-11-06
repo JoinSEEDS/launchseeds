@@ -64,7 +64,12 @@ export async function coinTrades(mint: string): Promise<CoinTrade[]> {
       }
       c.order = sigs.map((s) => s.signature);
       c.at = Date.now();
-    })().finally(() => { c.pending = null; });
+    })().catch((error) => {
+      // A background refresh has no caller to reject to, and an unhandled rejection
+      // stops the server. Keep the last trades and wait a full interval to retry.
+      c.at = Date.now();
+      console.error("Coin activity refresh failed", error instanceof Error ? error.message : error);
+    }).finally(() => { c.pending = null; });
   }
   if (c.pending && !c.order.length) await c.pending.catch(() => {});
   return c.order.map((s) => c.trades.get(s)).filter((t): t is CoinTrade => !!t);

@@ -1,7 +1,7 @@
-import { allocateUserBatches, batchWalletCount, userBatchFunding } from "../domain/user-funded-batches";
+import { allocateTranches, allocateUserBatches, batchWalletCount, trancheFunding, userBatchFunding } from "../domain/user-funded-batches";
 import { BUYER_RESERVE_LAMPORTS, JITO_TIP_LAMPORTS } from "./launch-bundle";
 import { scheduledCommitment } from "../domain/scheduled-plan";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, type Keypair } from "@solana/web3.js";
 import { publicScheduledPlan } from "./scheduled-launches";
 import { allocatedBudget, type BundleBuyer } from "./launch-bundle";
 import { tokenVisible } from "./site-brand";
@@ -18,6 +18,7 @@ import {
   type LaunchSettings,
 } from "../domain/launch-settings";
 import { marketMakerWalletName } from "./holder-reward-launch";
+import { deployerInUse, deployerKeypair, isOwnDeployer, needsDeployer, ownDeployerName } from "./own-deployer";
 import { Store, safeNumber } from "./store";
 import { canonicalStrategy } from "../domain/strategies";
 import type { StrategyConfigValue, Token } from "../db/schema";
@@ -37,8 +38,13 @@ export interface LaunchProvider {
     exceptTokenId?: number,
   ): void;
   planBuyers?(mintSignerRef: string, budgets: bigint[]): BundleBuyer[];
-  /** User-funded columns: per column, a pool signer then fresh wallets. */
-  planColumns?(mintSignerRef: string, columns: bigint[][]): BundleBuyer[];
+  /** User-funded columns: per column, a pool signer then fresh wallets; then
+   * each tranche's fresh wallets. Fresh wallets are reused when free. */
+  planColumns?(token: { id: number; mintSignerRef: string; fundingWallet?: string | null }, columns: bigint[][], tranches?: bigint[][]): BundleBuyer[];
+  /** Keeps a launcher's own key for a launch; refuses a wallet LaunchSeeds already holds. */
+  rememberDeployer?(keypair: Keypair, name: string): void;
+  /** Deletes a launcher's key from the wallet store. */
+  forgetWallet?(name: string): void;
   /** Balance hints only; deposit history remains authoritative for funding. */
   fundedWallets?(wallets: string[]): Promise<Set<string>>;
   /** Generates and stores the token's mint keypair; the CA stays private until deployed. */
@@ -146,6 +152,7 @@ export class LaunchService {
     capability: string,
     onCreated?: (tokenId: number) => void,
     settings: LaunchSettings = DEFAULT_LAUNCH_SETTINGS,
+    deployerKey?: string,
   ) {
     if (!this.provider) throw new Error("Launch service is not configured");
     if (settings.userBatches && !this.provider.userBatches) throw new ApiError("User-funded batches are not enabled on this deployment.",503);
@@ -153,6 +160,11 @@ export class LaunchService {
     if (!/^[a-f0-9]{64}$/.test(capability))
       throw new Error("Invalid launch key");
     const launchSettingsJson = canonicalLaunchSettings(settings);
+    const deployer = deployerKey ? deployerKeypair(deployerKey) : null;
+    // The key leaves the wallet store after launch, so nothing later may need it.
+    if (deployer && (!settings.userBatches || !settings.feesTo || !this.provider.rememberDeployer))
+      throw new ApiError("Deploying from your wallet needs funded columns and a creator-fee wallet.", 400);
+    const deployerName = deployer ? ownDeployerName(deployer.publicKey.toBase58()) : null;
     // Sniper protection is bought by LaunchSeeds's capital, not by a dev buy.
     if (settings.bundleLamports && solToLamports(input.devBuySol) > 0)
       throw new Error(
@@ -163,7 +175,7 @@ export class LaunchService {
       throw new Error("A coin whose fees go to a wallet has no reward fund");
     const accessHash = hash(capability),
       requestHash = hash(
-        JSON.stringify({ input, settingsJson: launchSettingsJson }),
+        JSON.stringify({ input, settingsJson: launchSettingsJson, ...(deployerName ? { deployerName } : {}) }),
       );
     const existingId = this.existing(accessHash, requestHash);
     let tokenId = existingId;
@@ -173,6 +185,9 @@ export class LaunchService {
         settings.userBatches ? null : settings.bundleLamports,
         typeof tokenId === "number" ? tokenId : undefined,
       );
+      const walletBusy = () => new ApiError("This wallet has a launch in progress. Wait for it to finish.", 409);
+      if (deployerName && deployerInUse(this.store.repo, deployerName)) throw walletBusy();
+      if (deployer) this.provider.rememberDeployer!(deployer, deployerName!);
       // A lost race leaves only an unused, unfunded mint key behind.
       const mint = this.provider.createMint();
       tokenId = this.store.repo.tx((tx) => {
@@ -182,6 +197,7 @@ export class LaunchService {
             throw new Error("Launch key already used for another request");
           return raced.id;
         }
+        if (deployerName && deployerInUse(tx, deployerName)) throw walletBusy();
         return tx.tokens.insert({
           handle: launchHandle(mint.mint),
           mint: null,
@@ -195,7 +211,7 @@ export class LaunchService {
           x: input.x,
           telegram: input.telegram,
           fundingWallet: null,
-          fundingWalletName: null,
+          fundingWalletName: deployerName,
           creatorWallet: null,
           rewardWallet: null,
           launcherWallet: null,
@@ -234,9 +250,10 @@ export class LaunchService {
     if (settings.userBatches) {
       if (!this.provider.planColumns) throw new Error("Column launches are not configured");
       const layout = allocateUserBatches(settings.userBatches, settings.scheduledAt);
-      const buyers = this.provider.planColumns(token.mintSignerRef, layout.map((column) => column.budgets));
+      const tranches = allocateTranches(settings.userBatches, settings.scheduledAt);
+      const buyers = this.provider.planColumns({ id: token.id, mintSignerRef: token.mintSignerRef, fundingWallet: token.fundingWallet }, layout.map((column) => column.budgets), tranches.map((t) => t.budgets));
       const proceeds = settings.userBatches.proceedsWallet;
-      if (buyers.some((buyer) => buyer.wallet === proceeds) || proceeds === token.fundingWallet)
+      if (buyers.some((buyer) => buyer.wallet === proceeds) || (proceeds === token.fundingWallet && !isOwnDeployer(token.fundingWalletName)))
         throw new ApiError("Choose an external proceeds wallet, not a launch or buyer wallet.", 400);
       return buyers;
     }
@@ -413,7 +430,9 @@ export class LaunchService {
     const wallets = preparedWallets(token);
     try {
       const verifyUnfunded = async () => {
+        // An own wallet may hold SOL already; only a full balance counts as paid.
         if (
+          !isOwnDeployer(token.fundingWalletName) &&
           this.provider!.hasIncomingFunds &&
           (await this.provider!.hasIncomingFunds(wallets.fundingWallet))
         ) {
@@ -654,6 +673,18 @@ export class LaunchService {
       });
     }
   }
+  /** Deletes each launcher key no launch needs any more; launches that missed
+   * their time expire first, so they can never run without it. */
+  forgetFinishedDeployers(now = Date.now()) {
+    const forget = this.provider?.forgetWallet?.bind(this.provider);
+    if (!forget) return;
+    const repo = this.store.repo;
+    const tokens = repo.tokens.all().filter((t) => isOwnDeployer(t.fundingWalletName));
+    for (const token of tokens)
+      if (token.status === "funding" && !needsDeployer(repo, token, now)) repo.tokens.expireFunding(token.id);
+    for (const name of new Set(tokens.map((t) => t.fundingWalletName!)))
+      if (!deployerInUse(repo, name, now)) forget(name);
+  }
   private async processLeased(tokenId: number, assertLease: () => void) {
     const provider = this.provider!;
     assertLease();
@@ -819,6 +850,7 @@ export function validateSchedule(settings: LaunchSettings, now = Date.now()) {
     );
   if (settings.userBatches) {
     allocateUserBatches(settings.userBatches, settings.scheduledAt);
+    allocateTranches(settings.userBatches, settings.scheduledAt);
     try { new PublicKey(settings.userBatches.proceedsWallet); } catch { throw new ApiError("Enter a valid proceeds wallet.", 400); }
   } else allocatedBudget(BigInt(settings.bundleLamports!), settings.walletSharesBps!);
 }
@@ -826,5 +858,7 @@ export function validateSchedule(settings: LaunchSettings, now = Date.now()) {
 function protectionAmount(settings: LaunchSettings) { return settings.userBatches ? null : settings.bundleLamports; }
 export function launchSupplement(settings: LaunchSettings) {
   if (!settings.userBatches) return bundleFeeLamports(settings.bundleLamports);
-  return Number(userBatchFunding({totalBuy:BigInt(settings.bundleLamports!),walletCount:batchWalletCount(settings.userBatches),baseFee:0n,serviceFee:0n,reservePerWallet:BigInt(BUYER_RESERVE_LAMPORTS),bundleTip:BigInt(JITO_TIP_LAMPORTS)}).required);
+  // Tranche SOL stays in the deposit wallet after the launch, until each fires.
+  return Number(userBatchFunding({totalBuy:BigInt(settings.bundleLamports!),walletCount:batchWalletCount(settings.userBatches),baseFee:0n,serviceFee:0n,reservePerWallet:BigInt(BUYER_RESERVE_LAMPORTS),bundleTip:BigInt(JITO_TIP_LAMPORTS)}).required
+    + trancheFunding(settings.userBatches, BigInt(BUYER_RESERVE_LAMPORTS)));
 }

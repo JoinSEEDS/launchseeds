@@ -2,6 +2,7 @@ import { apiJson } from "../../../lib/api-security";
 import { getOperationalLaunchReadiness } from "../../../src/server/launch-health";
 import { getFreeLaunchService, getStore } from "../../../src/server/runtime";
 import { protectionBudget } from "../../../src/server/protection-budget";
+import { solUsd } from "../../../src/server/solard";
 
 /** Configuration and actual operational launch readiness are not synonymous. */
 export async function GET(): Promise<Response> {
@@ -25,6 +26,7 @@ export async function GET(): Promise<Response> {
       sniperBundles: process.env.LAUNCHSEEDS_LAUNCH_BUNDLES === "true",
       userFundedBatches: process.env.LAUNCHSEEDS_USER_BATCHES === "true" && process.env.LAUNCHSEEDS_LAUNCH_BUNDLES === "true",
       protectionBudget: protectionBudget(getStore()),
+      solUsd: await solUsd().catch(() => null),
       message: readiness.enabled
         ? "Final funding requirements are confirmed during preparation."
         : "Token launches are temporarily unavailable. Do not send funds.",

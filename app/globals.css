@@ -4779,3 +4779,4 @@ select.input {
 
 .brand { display: inline-flex; align-items: center; gap: 8px; }
 .brand__logo { width: 28px; height: 28px; object-fit: contain; }
+.launch-column--tranche { border-style: dashed; }

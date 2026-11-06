@@ -62,6 +62,8 @@ export const exitMinimum = (
 export type BundleBuyer = {
   /** User-funded launches: the column (buy transaction) this wallet buys in. */
   batchIndex?: number;
+  /** User-funded launches: the post-launch tranche this wallet buys in instead. */
+  tranche?: number;
   /** signer: a reused LaunchSeeds pool wallet that signs and pays its column's
    * transactions; fresh: a wallet generated for this launch only. */
   role?: "signer" | "fresh";

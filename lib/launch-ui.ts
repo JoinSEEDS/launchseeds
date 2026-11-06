@@ -3,6 +3,7 @@ import { coinPath } from "./coin-url";
 import type { LaunchSettings } from "../src/domain/launch-settings";
 import { MAX_TOKEN_IMAGE_BYTES, TOKEN_IMAGE_SIZE_ERROR } from "./media-policy";
 import { validTelegram, normalizeX, validX } from "./launch-socials";
+import { TICKER_PATTERN, normalizeTicker } from "./ticker";
 import { DESCRIPTION, type Strategy } from "./strategy";
 
 /** Public statuses exposed by the canonical launch service. */
@@ -185,8 +186,8 @@ export function validateLaunchFields(fields: LaunchFormFields): string | null {
   if (!fields.name.trim() || fields.name.trim().length > 32) {
     return "Enter a token name up to 32 characters.";
   }
-  if (!/^[A-Za-z0-9]{1,10}$/.test(fields.symbol.trim())) {
-    return "Use 1–10 letters or digits for the ticker.";
+  if (!TICKER_PATTERN.test(fields.symbol.trim())) {
+    return "Use up to 13 letters or digits for the ticker; / . _ - can go between them.";
   }
   if (parseSol(fields.devBuySol) === null) {
     return "Enter a valid initial reward fund amount in SOL, with up to nine decimals.";
@@ -214,7 +215,7 @@ export function validateLaunchFields(fields: LaunchFormFields): string | null {
 export function buildLaunchPayload(fields: LaunchFormFields) {
   return {
     name: fields.name.trim(),
-    symbol: fields.symbol.trim().toUpperCase(),
+    symbol: normalizeTicker(fields.symbol.trim()),
     description: fields.description?.trim() || DESCRIPTION,
     image: fields.image,
     website: fields.website.trim(),

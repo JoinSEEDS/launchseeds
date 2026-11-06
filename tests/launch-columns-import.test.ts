@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { columnsExport, parseColumnsImport } from "../lib/launch-columns";
+import { columnsExport, parseColumnsImport, simpleFromImport } from "../lib/launch-columns";
 
 describe("launch columns import", () => {
   test("CSV: rows per wallet, first row is the signer, first sell rule wins", () => {
@@ -28,4 +28,34 @@ describe("launch columns import", () => {
     expect(() => parseColumnsImport("1,0.1,sometimes")).toThrow("sell rule");
     expect(() => parseColumnsImport('{"columns":[{"slots":[]}]}')).toThrow("slots");
   });
+
+  test("tranches: CSV rows t1.., trigger and sell rule; JSON round trip", () => {
+    const { columns, tranches } = parseColumnsImport(
+      "column,sol,sell\n1,0.2,profit 2\nt1,0.1,after 10s,profit 10\nt1,0.05\nt2,0.2,mcap below 20k within 2h,time 60\nt3,0.1,mcap 1.5m\n",
+    );
+    expect(columns).toHaveLength(1);
+    expect(tranches.map((t) => t.slots)).toEqual([["0.1", "0.05"], ["0.2"], ["0.1"]]);
+    expect(tranches[0]).toMatchObject({ trigger: "delay", seconds: "10", exit: "profit", profit: "10" });
+    expect(tranches[1]).toMatchObject({ trigger: "below", usd: "20000", within: "120", exit: "time", minutes: "60" });
+    expect(tranches[2]).toMatchObject({ trigger: "above", usd: "1500000" });
+    const again = parseColumnsImport(columnsExport(columns, "abc", tranches));
+    expect(again.tranches).toEqual(tranches);
+    expect(() => parseColumnsImport("1,0.1\nt2,0.1")).toThrow("none skipped");
+    expect(() => parseColumnsImport("1,0.1\nt1,0.1,someday")).toThrow("trigger");
+  });
+});
+test("an import that fits simple mode stays simple; any other needs advanced", () => {
+  const one = parseColumnsImport(JSON.stringify({ columns: [{ slots: [1.25, 1.25, 1.25, 1.25], sell: "floor 5000" }] }));
+  expect(simpleFromImport(one.columns, one.tranches)).toMatchObject({ wallets: "4", sol: "1.25", floor: "5000", trancheWallets: "0" });
+  const tranche = parseColumnsImport(JSON.stringify({ columns: [{ slots: [0.5], sell: "floor 5000" }], tranches: [{ slots: [0.2, 0.2], trigger: "after 30s", sell: "ladder 6000" }] }));
+  expect(simpleFromImport(tranche.columns, tranche.tranches)).toMatchObject({ trancheWallets: "2", trancheSol: "0.2", seconds: "30", trancheFloor: "6000" });
+  for (const file of [
+    { columns: [{ slots: [0.7], sell: "floor 5000" }, { slots: [0.7], sell: "floor 5000" }] },
+    { columns: [{ slots: [1, 2], sell: "floor 5000" }] },
+    { columns: [{ slots: [1], sell: "profit 2" }] },
+    { columns: [{ slots: [1], sell: "floor 5000" }], tranches: [{ slots: [0.2], trigger: "mcap above 9000", sell: "ladder 6000" }] },
+  ]) {
+    const parsed = parseColumnsImport(JSON.stringify(file));
+    expect(simpleFromImport(parsed.columns, parsed.tranches)).toBeNull();
+  }
 });

@@ -79,6 +79,15 @@ export async function runLaunchCycle(input: {
         });
       }
     }
+    try {
+      input.launch.forgetFinishedDeployers();
+    } catch (error) {
+      errors.push({
+        tokenId: 0,
+        operation: "deployer key cleanup",
+        error: error instanceof Error ? error.message : "Cleanup failed",
+      });
+    }
     return { errors };
   });
 }

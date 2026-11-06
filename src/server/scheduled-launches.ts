@@ -68,7 +68,7 @@ export function publicScheduledPlan(
     userBatches: settings.userBatches,
     batchRuns: settings.userBatches ? store.repo.userBatches.byToken(token.id).map(row=>{
       const state=JSON.parse(row.stateJson);
-      return {batchIndex:row.batchIndex,status:String(state.status),buyCostLamports:String(state.buyCostLamports),netSaleLamports:state.netSaleLamports as string|null,paidLamports:state.paidLamports as string|null,saleSignature:state.sale?.signature as string|undefined,payoutSignature:state.payout?.signature as string|undefined};
+      return {batchIndex:row.batchIndex,status:String(state.status),buyCostLamports:String(state.buyCostLamports),netSaleLamports:state.netSaleLamports as string|null,paidLamports:state.paidLamports as string|null,buySignature:state.buy?.signature as string|undefined,soldWallets:Number(state.ladderIndex??0),saleSignature:state.sale?.signature as string|undefined,payoutSignature:state.payout?.signature as string|undefined};
     }) : [],
     feesTo: settings.feesTo,
     launchSignature: token.deploySignature,
@@ -76,6 +76,7 @@ export function publicScheduledPlan(
     walletSharesBps: settings.walletSharesBps!,
     wallets: (JSON.parse(plan.buyersJson) as BundleBuyer[]).map((b) => ({
       batchIndex: b.batchIndex,
+      tranche: b.tranche,
       role: b.role,
       // A signer's pool name (ace, art, ...) is public; fresh wallets need none.
       name: b.role === "signer" ? b.name : null,

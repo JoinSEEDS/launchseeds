@@ -1,6 +1,7 @@
 import { normalizeX, telegramLink, xLink } from "../../lib/launch-socials";
 import { allocateUserBatches } from "../../src/domain/user-funded-batches";
 import { mountLaunchColumns } from "../../lib/launch-columns";
+import { normalizeTicker } from "../../lib/ticker";
 import { mountLaunchCountdown } from "../../lib/launch-countdown";
 import { allocatedBudget } from "../../src/domain/protection-allocation";
 import { render } from "tradjs/client";
@@ -53,6 +54,7 @@ type Config = {
   sniperBundles?: boolean;
   userFundedBatches?: boolean;
   protectionBudget?: { maxLamports: number; checkedAt: number; fresh: boolean };
+  solUsd?: number | null;
 };
 
 function find<T extends HTMLElement>(id: string): T {
@@ -129,6 +131,15 @@ export default function mount() {
   const profitMode = find<HTMLSelectElement>("f-profit-mode");
   const feeMode = find<HTMLSelectElement>("f-fee-mode");
   const feesTo = find<HTMLInputElement>("f-fees-to");
+  const deployerKey = find<HTMLInputElement>("f-deployer-key");
+  // An agent's coin: its creator fees go to the agent's wallet.
+  const agentLaunch = new URLSearchParams(location.search);
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(agentLaunch.get("feesTo") ?? "")) {
+    name.value = (agentLaunch.get("name") ?? "").slice(0, 32);
+    feeMode.value = "creator";
+    feesTo.value = agentLaunch.get("feesTo")!;
+    find<HTMLElement>("creator-fees-field").hidden = false;
+  }
   const profitWallet = find<HTMLInputElement>("f-profit-wallet");
   const boostMinutes = find<HTMLInputElement>("f-boost-minutes");
   const boostSteps = find<HTMLInputElement>("f-boost-steps");
@@ -174,7 +185,7 @@ export default function mount() {
   let editingPrepared = false;
 
   const symbolNow = () =>
-    (ticker.value.trim() || "TOKEN").replace(/^\$/, "").toUpperCase();
+    normalizeTicker((ticker.value.trim() || "TOKEN").replace(/^\$/, ""));
   const isOn = (panel: string) =>
     form
       .querySelector(`[data-toggle-panel="${panel}"] [data-switch]`)
@@ -238,8 +249,7 @@ export default function mount() {
   const extraSol = () => {
     const fund = Math.round(Number(rewardFund()) * 1e9) || 0;
     if(userFunded()) {
-      const count=launchColumns.read(scheduledNow()).wallets;
-      return String(((bundleLamports() ?? 0)+count*14_000_000+100_000)/1e9);
+      return String(launchColumns.read(scheduledNow()).fundedLamports/1e9);
     }
     return (
       ((fund + bundleFeeLamports(bundleLamports())) / 1e9)
@@ -269,6 +279,7 @@ export default function mount() {
     const batches = userFunded() ? columnRead.value : null;
     const feeReady = feeMode.value === "holders" || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(feesTo.value.trim());
     if (strict && !feeReady) throw new Error("Enter a valid creator-fee wallet address.");
+    if (strict && deployerKey.value.trim() && feeMode.value !== "creator") throw new Error("Deploying from your wallet needs creator fees to a wallet.");
     const walletReady = userFunded() ? batches !== null :
       profitMode.value !== "wallet" ||
       /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(profitWallet.value.trim());
@@ -349,12 +360,17 @@ export default function mount() {
       `${+((BUNDLE_STOPS_SOL[stop]! * exitPercent()) / 100).toFixed(4)} SOL`;
   }
 
-  function showSettingsSummary() {
-    const settings = readSettings(false);
+  /** Fields that follow a choice. Painted apart from the summary, which cannot
+   * be built from a half-filled form: the field that completes it must show. */
+  function showChosenFields() {
     find<HTMLElement>("creator-fees-field").hidden = feeMode.value !== "creator";
     find<HTMLElement>("profit-wallet-field").hidden =
       profitMode.value !== "wallet";
     find<HTMLElement>("boost-controls").hidden = profitMode.value === "wallet";
+  }
+
+  function showSettingsSummary() {
+    const settings = readSettings(false);
     const amount = bundleLamports();
     const shares = sharesInputs.map((i) => Math.round(Number(i.value) * 100));
     const total = shares.reduce((a, b) => a + b, 0);
@@ -383,10 +399,10 @@ export default function mount() {
     // themselves plus each wallet's network reserve and the Jito tip.
     const columnRead = userFunded() ? launchColumns.read(scheduledNow()) : null;
     find<HTMLElement>("summary-bundle-label").textContent = columnRead
-      ? `Buys + ${columnRead.wallets} wallet reserve${columnRead.wallets === 1 ? "" : "s"}`
+      ? `Buys + ${columnRead.wallets + columnRead.trancheWallets} wallet reserve${columnRead.wallets + columnRead.trancheWallets === 1 ? "" : "s"}`
       : "Sniper protection (3%)";
     if (columnRead) find<HTMLElement>("summary-bundle-fee").textContent =
-      `${(columnRead.totalLamports + columnRead.wallets * 14_000_000 + 100_000) / 1e9} SOL`;
+      `${columnRead.fundedLamports / 1e9} SOL`;
     const rows = [
       [
         "Launch time",
@@ -470,6 +486,8 @@ export default function mount() {
 
   /** Keep the same direct render pattern; only the summary is client-owned. */
   const sync = () => {
+    launchColumns.setSolUsd(config?.solUsd ?? null);
+    showChosenFields();
     const symbol = symbolNow();
     find<HTMLElement>("summary-name").textContent =
       name.value.trim() || "Untitled";
@@ -1013,7 +1031,7 @@ export default function mount() {
     launchHandle = status.handle;
     // Public launch status also supplies the token identity on a direct
     // /launch?launch=… visit. Never leave the designer's sample $SLAB label.
-    const symbol = status.symbol.replace(/^\$/, "").toUpperCase();
+    const symbol = normalizeTicker(status.symbol.replace(/^\$/, ""));
     find<HTMLElement>("summary-ticker").textContent = `$${symbol}`;
     find<HTMLElement>("summary-name").textContent = status.name;
     statusPanel
@@ -1349,14 +1367,17 @@ export default function mount() {
       }
       // This is an idempotency key for the in-flight request, NOT a user edit
       // link. No draft keys are persisted in localStorage or the URL.
+      // Sent once with the request; never part of the saved payload.
+      const key = deployerKey.value.trim();
       const response = await postJson<PublicLaunchStatus>(
         "/api/launches",
-        JSON.parse(payload),
+        { ...JSON.parse(payload), ...(key ? { deployerKey: key } : {}) },
         {
           headers: { authorization: `Bearer ${capability}` },
           timeoutMs: 30_000,
         },
       );
+      deployerKey.value = "";
       if (!validLaunchStatus(response))
         throw new Error("Launch preparation response was incomplete.");
       showStatus(response);

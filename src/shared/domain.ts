@@ -1,4 +1,5 @@
 import { validTelegram, normalizeX, validX } from "../../lib/launch-socials";
+import { TICKER_PATTERN, normalizeTicker } from "../../lib/ticker";
 import { createHash } from "node:crypto";
 import { z } from "sqlite-zod-orm";
 /** Mainnet USDC mint; never infer a treasury balance from another mint. */
@@ -24,8 +25,8 @@ export const launchInput = z.object({
   symbol: z
     .string()
     .trim()
-    .regex(/^[A-Za-z0-9]{1,10}$/)
-    .transform((value) => value.toUpperCase()),
+    .regex(TICKER_PATTERN)
+    .transform(normalizeTicker),
   description: z.string().trim().max(4000).default(""),
   image: z
     .string()
