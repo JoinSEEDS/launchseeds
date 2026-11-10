@@ -675,6 +675,22 @@ export class LaunchService {
   }
   /** Deletes each launcher key no launch needs any more; launches that missed
    * their time expire first, so they can never run without it. */
+  /** A launch whose bundle expired well after its launch time stops here instead
+   * of rebuilding forever: nothing landed, so nothing exists on chain, and its
+   * funds stay in the launch wallet. Its columns are skipped. */
+  giveUpExpired(tokenId: number, now = Date.now()) {
+    const token = this.store.repo.tokens.get(tokenId);
+    const schedule = token ? storedLaunchSettings(token.launchSettingsJson).scheduledAt : null;
+    if (!token || schedule === null || now <= schedule + LAUNCH_GIVE_UP_MS) return false;
+    return this.store.repo.tx((tx) => {
+      if (!tx.tokens.transition(tokenId, "deploying", "failed", { error: "The launch did not land in time. Nothing was created on chain, and the funds are still in the launch wallet." })) return false;
+      for (const row of tx.userBatches.byToken(tokenId)) {
+        const state = JSON.parse(row.stateJson);
+        tx.userBatches.save(row.id, row.revision, JSON.stringify({ ...state, status: "skipped", error: "Launch never landed" }), now);
+      }
+      return true;
+    });
+  }
   forgetFinishedDeployers(now = Date.now()) {
     const forget = this.provider?.forgetWallet?.bind(this.provider);
     if (!forget) return;
@@ -781,6 +797,7 @@ export class LaunchService {
     assertLease();
     let result = await provider.executeDeployment(intent);
     assertLease();
+    if (result.status === "expired" && this.giveUpExpired(tokenId)) return;
     if (result.status === "expired") {
       if (!provider.refreshDeployment)
         throw new Error("Launch intent expired; reconciliation required");
@@ -827,6 +844,8 @@ export class LaunchService {
   }
 }
 
+/** How long past its launch time a launch keeps rebuilding a bundle that expired. */
+export const LAUNCH_GIVE_UP_MS = 15 * 60_000;
 export function validateSchedule(settings: LaunchSettings, now = Date.now()) {
   if (settings.feesTo) {
     try { new PublicKey(settings.feesTo); }

@@ -30,7 +30,7 @@ export default function LaunchPage() {
   }
   const quotedTotal = launchTotal("0", fixedFee) || "0.02";
   return (
-    <main className="page" data-launch="" data-scheduled-launch="" data-brand={brand.kind}>
+    <main className="page" data-launch="" data-scheduled-launch="" data-brand={brand.kind} data-brand-name={brand.name}>
       <div className="page-head">
         <div>
           <h1 className="page-title">Schedule a launch</h1>

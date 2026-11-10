@@ -1227,7 +1227,7 @@ export default function mount() {
       const art = avatar.querySelector("img");
       if (art) liveAvatar.replaceChildren(art.cloneNode());
       else liveAvatar.textContent = avatar.textContent;
-      const text = `$${symbol} is live on ${document.querySelector("[data-brand]")?.getAttribute("data-brand") === "launchseeds" ? "LaunchSeeds" : "LaunchSeeds"}. Public launch plan and protection-wallet rules.`;
+      const text = `$${symbol} is live on ${document.querySelector("[data-brand-name]")?.getAttribute("data-brand-name") || "LaunchSeeds"}. Public launch plan and protection-wallet rules.`;
       find<HTMLAnchorElement>("share-on-x").href =
         `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(location.origin + url)}`;
     }
