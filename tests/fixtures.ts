@@ -24,7 +24,6 @@ export function tokenFixture(
     creatorWallet: WALLET,
     rewardWallet: WALLET,
     launcherWallet: null,
-    devBuyRecipient: null,
     refundWallet: null,
     requiredLamports: "20000000",
     devBuyLamports: "0",
@@ -33,10 +32,6 @@ export function tokenFixture(
     deploySignature: null,
     feeConfigSignature: null,
     error: null,
-    activeStrategyId: null,
-    leaderStrategyId: null,
-    leaderSince: null,
-    lastGravityMinute: null,
     createdAt: Date.now(),
     launchedAt: Date.now(),
     accessHash: hex(32),
@@ -53,21 +48,15 @@ export function insertToken(
   const id = store.repo.tokens.insert(tokenFixture(patch));
   return store.repo.tokens.get(id)!;
 }
-export function seedHolder(
-  store: Store,
-  tokenId: number,
-  wallet = WALLET,
-  balanceRaw = "25000000",
-  gravityMicros = "100000000",
-) {
-  store.data.database.holders.insert({
-    tokenId,
-    wallet,
-    balanceRaw,
-    gravityMicros,
-    heldSince: Date.now(),
-    balanceSlot: 1,
-    balanceUpdatedAt: Date.now(),
-    excluded: false,
-  });
+
+/** Valid settings for a scheduled launch: one column of `slots` (lamports), sold at a $5k floor. */
+export function scheduledSettings(scheduledAt: number, slots: number[] = [100_000_000], feesTo = "Vote111111111111111111111111111111111111111") {
+  return {
+    publishMint: true,
+    publishProject: true,
+    scheduledAt,
+    userBatches: { proceedsWallet: "Stake11111111111111111111111111111111111111", columns: [{ slots, exit: { kind: "floor" as const, usd: 5000 } }] },
+    bundleLamports: slots.reduce((a, b) => a + b, 0),
+    feesTo,
+  };
 }

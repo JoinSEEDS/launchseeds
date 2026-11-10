@@ -2,7 +2,7 @@ import { render } from "tradjs/client";
 import { CoinActivity, type Activity } from "../app/components/coin-activity";
 import { SequentialPoller, getJson } from "./client-request";
 
-/** Live scheduled coin: trades and gravity refresh every 10 seconds. */
+/** Live scheduled coin: trades refresh every 10 seconds. */
 export function mountCoinActivity() {
   const page = document.querySelector<HTMLElement>("[data-coin-mint]");
   const root = document.getElementById("coin-activity-root");

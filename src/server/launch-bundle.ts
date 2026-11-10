@@ -1,13 +1,5 @@
-/** Built-in sniper protection: the coin is created and first bought in one Jito
- * bundle of four transactions, so no outside buyer can land between them.
- *
- *   1. the coin's new funding wallet creates the holder-reward coin (the creator
- *      buys nothing) and funds three new, public bundle wallets;
- *   2–4. each bundle wallet buys its share of the launch buy.
- *
- * The bundle wallets later sell together in one transaction, only when every
- * wallet gets back at least 102% of what it spent (see launch-bundle-exit.ts).
- * All bundle wallets are listed on the coin's page. */
+/** The launch bundle: the coin is created and first bought by its columns in one
+ * Jito bundle, so nobody can buy before them. */
 import {
   PublicKey,
   SystemProgram,
@@ -36,24 +28,6 @@ export const bundleWalletName = (mint: string, index: number) =>
 export const bundleOverheadLamports = () =>
   BUNDLE_BUYERS * BUYER_RESERVE_LAMPORTS + JITO_TIP_LAMPORTS;
 
-/** Splits the launch buy exactly; the first wallets take the remainder. */
-export function splitBudget(
-  totalLamports: bigint,
-  buyers = BUNDLE_BUYERS,
-): bigint[] {
-  if (totalLamports < BigInt(MIN_BUYER_LAMPORTS) * BigInt(buyers))
-    throw new Error(
-      `Sniper protection needs at least ${(MIN_BUYER_LAMPORTS * buyers) / 1e9} SOL of launch buy`,
-    );
-  const base = totalLamports / BigInt(buyers);
-  const rest = totalLamports - base * BigInt(buyers);
-  return Array.from(
-    { length: buyers },
-    (_, i) => base + (BigInt(i) < rest ? 1n : 0n),
-  );
-}
-
-export { allocatedBudget } from "../domain/protection-allocation";
 export const exitMinimum = (
   budgetLamports: bigint,
   bps: bigint = EXIT_MINIMUM_BPS,
@@ -74,7 +48,6 @@ export type BundleBuyer = {
 
 /** Public part of a bundle launch intent (the signed bytes are never exposed). */
 export type BundleIntent = {
-  userFunded?: boolean;
   kind: "bundle";
   transactions: string[];
   signatures: string[];
@@ -86,8 +59,6 @@ export type BundleIntent = {
   metadata: { name: string; symbol: string; uri: string };
   /** Creator fees to this wallet; absent: native Pump holder rewards. */
   feesTo?: string;
-  /** LaunchSeeds's capital wallet that funded the bundle wallets. */
-  capitalWallet?: string;
   /** The coin's funding (dev) wallet that signs creation. */
   fundingWallet?: string;
   superseded?: unknown[];

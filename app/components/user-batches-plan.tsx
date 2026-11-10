@@ -88,7 +88,7 @@ export function UserBatchesPlan({ plan }: { plan: ScheduledLaunchView }) {
       </div>
       <div className="coin-columns__meta">
         <span><span className="dim">Proceeds</span> {account(batches.proceedsWallet)}</span>
-        <span><span className="dim">Fees</span> {plan.holderRewards ? "holders" : plan.feesTo ? account(plan.feesTo) : "—"}</span>
+        <span><span className="dim">Fees</span> {plan.feesTo ? account(plan.feesTo) : "—"}</span>
         {plan.launchSignature ? tx(plan.launchSignature, "launch") : null}
         <a href={`/api/schedules/${plan.planHash}`}>plan JSON</a>
       </div>

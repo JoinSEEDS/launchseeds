@@ -29,8 +29,7 @@ test("a launch form recovers a failed readiness check without reload or losing e
   let cleanup: ReturnType<typeof mount>,
     enabled = false,
     transportFails = false,
-    checks = 0,
-    budget = 1_500_000_000;
+    checks = 0;
   try {
     for (const key of keys)
       Object.defineProperty(globalThis, key, {
@@ -46,12 +45,6 @@ test("a launch form recovers a failed readiness check without reload or losing e
           launchEnabled: enabled,
           baseFeeLamports: 20000000,
           message: "",
-          sniperBundles: true,
-          protectionBudget: {
-            maxLamports: budget,
-            checkedAt: Date.now(),
-            fresh: true,
-          },
         });
       }
       return Response.json({ packs: [], stocks: [] });
@@ -77,9 +70,6 @@ test("a launch form recovers a failed readiness check without reload or losing e
       false,
     );
     expect(name.value).toBe("Keep these details");
-    expect(
-      (dom.window.document.getElementById("f-bundle") as HTMLInputElement).max,
-    ).toBe("3");
     transportFails = true;
     dom.window.dispatchEvent(new dom.window.Event("focus"));
     await Bun.sleep(20);
@@ -91,22 +81,6 @@ test("a launch form recovers a failed readiness check without reload or losing e
     ).toBe(true);
     expect(name.value).toBe("Keep these details");
     transportFails = false;
-    budget = 0;
-    dom.window.dispatchEvent(new dom.window.Event("focus"));
-    await Bun.sleep(20);
-    expect(dom.window.document.getElementById("submit-wrap")!.hidden).toBe(
-      false,
-    );
-    expect(
-      (
-        dom.window.document.querySelector(
-          "#sniper-protection [data-switch]",
-        ) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-    expect(
-      dom.window.document.getElementById("bundle-capacity")!.textContent,
-    ).toContain("Checking automatically");
     enabled = false;
     dom.window.dispatchEvent(new dom.window.Event("focus"));
     await Bun.sleep(20);
@@ -133,7 +107,7 @@ test("a launch form recovers a failed readiness check without reload or losing e
 });
 
 // Browser submission sends the actual schedule and allocation without fetching legacy catalogues.
-for (const feeMode of ["holders", "creator"] as const) test(`scheduled form submits time, allocation and profit wallet with ${feeMode} fees`, async () => {
+test("scheduled form submits its time, columns, proceeds and creator-fee wallet", async () => {
   const dom = new JSDOM(renderToString(<LaunchPage />), {
     url: "https://launchseeds.xyz/launch",
     pretendToBeVisual: true,
@@ -175,12 +149,6 @@ for (const feeMode of ["holders", "creator"] as const) test(`scheduled form subm
         return Response.json({
           launchEnabled: true,
           baseFeeLamports: 20000000,
-          sniperBundles: true,
-          protectionBudget: {
-            maxLamports: 1000000000,
-            checkedAt: Date.now(),
-            fresh: true,
-          },
         });
       if (path.endsWith("/api/media"))
         return Response.json({
@@ -210,12 +178,16 @@ for (const feeMode of ["holders", "creator"] as const) test(`scheduled form subm
       get = (id: string) => d.getElementById(id) as HTMLInputElement;
     get("f-name").value = "Scheduled";
     get("f-ticker").value = "TIME";
-    get("f-profit-mode").value = "wallet";
-    get("f-profit-wallet").value = "1".repeat(32);
-    get("f-fee-mode").value = feeMode;
-    get("f-fees-to").value = feeMode === "creator" ? "1".repeat(32) : "";
-    for (const [i, value] of ["50", "30", "20"].entries())
-      get(`f-wallet-share-${i}`).value = value;
+    get("f-fees-to").value = "1".repeat(32);
+    get("f-proceeds-wallet").value = "2".repeat(32);
+    const simple = (label: string, value: string) => {
+      const input = d.querySelector(`#launch-simple input[aria-label^="${label}"]`) as HTMLInputElement;
+      input.value = value;
+      input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    };
+    simple("Wallets", "2");
+    simple("SOL each", "0.1");
+    simple("Sell all once market cap stays above", "5000");
     Object.defineProperty(get("f-image"), "files", {
       value: [
         new File([new Uint8Array([1, 2, 3])], "image.png", {
@@ -231,18 +203,12 @@ for (const feeMode of ["holders", "creator"] as const) test(`scheduled form subm
     expect(payload).toBeDefined();
     expect(d.getElementById("reserved-ca-value")!.textContent).toBe("So11111111111111111111111111111111111111112");
     expect((d.getElementById("reserved-ca-preview") as HTMLElement).hidden).toBe(false);
-    expect(payload.firstStrategy).toBeNull();
     expect(payload.devBuySol).toBe("0");
-    expect(payload.settings.walletSharesBps).toEqual([5000, 3000, 2000]);
-    expect(payload.settings.profitPolicy).toEqual({
-      mode: "wallet",
-      wallet: "1".repeat(32),
-    });
+    expect(payload.settings.userBatches.columns[0].slots).toEqual([100000000, 100000000]);
+    expect(payload.settings.userBatches.proceedsWallet).toBe("2".repeat(32));
     expect(payload.settings.scheduledAt).toBeGreaterThan(Date.now() + 120000);
-    expect(payload.settings.bundleMaxHoldMs).toBeNull();
     expect(payload.settings.publishMint).toBe(true);
-    expect(payload.settings.holderRewards).toBe(feeMode === "holders");
-    expect(payload.settings.feesTo).toBe(feeMode === "creator" ? "1".repeat(32) : null);
+    expect(payload.settings.feesTo).toBe("1".repeat(32));
     expect(catalogCalls).toBe(0);
   } finally {
     cleanup?.();

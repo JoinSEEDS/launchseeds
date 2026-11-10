@@ -1,7 +1,7 @@
 /** User-funded launch columns: filled in by lib/launch-columns.ts. */
 export function UserBatchControls() {
   return (
-    <section className="panel" id="user-batch-controls" hidden>
+    <section className="panel" id="user-batch-controls">
       <div className="panel__head"><span className="label">03 / Launch columns</span></div>
       <div className="panel__body stack">
         <p className="setting-help">

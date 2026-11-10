@@ -7,7 +7,7 @@ import { runtimeSchemas } from "./runtime-schema";
 const schemas = { ...businessSchemas, ...runtimeSchemas };
 import { INDEXES } from "./indexes";
 
-export function openDatabase(path = "./data/launchseeds-v3.sqlite") {
+export function openDatabase(path = "./data/launchseeds.sqlite") {
   // Inspect before the ORM can rebuild an incompatible legacy table.
   if (path !== ":memory:" && existsSync(path)) {
     const source = new Inspector(path, { readonly: true });

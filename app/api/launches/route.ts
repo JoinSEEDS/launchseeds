@@ -1,4 +1,3 @@
-import { currentBrand } from "../../../src/server/site-brand";
 import { notifyLaunchWorker } from "../../../src/server/launch-wake";
 import {
   ApiError,
@@ -17,7 +16,7 @@ import { IngressRateLimiter } from "../../../lib/trusted-client";
 // per-client quotas; untrusted forwarding headers are never used as identities.
 const launchLimit = new IngressRateLimiter("launch", 5, 10 * 60_000);
 
-/** Prepare a real funding address for a governed token's initial strategy. */
+/** Prepare a scheduled launch and its real funding address. */
 export async function POST(request: Request): Promise<Response> {
   try {
     requireSameOrigin(request);
@@ -41,7 +40,6 @@ export async function POST(request: Request): Promise<Response> {
     }
     const payload = await readBoundedJson<
       LaunchInput & {
-        firstStrategy?: unknown;
         settings?: unknown;
         deployerKey?: unknown;
       }
@@ -52,8 +50,7 @@ export async function POST(request: Request): Promise<Response> {
     try {
       settings = parseLaunchSettings(payload.settings);
       if(process.env.LAUNCHSEEDS_USER_BATCHES==="true"&&!settings.userBatches)throw new ApiError("The launch form has changed. Reload to configure fully funded batches.",409);
-      if (currentBrand().kind === "launchseeds" && !settings.publishMint) throw new ApiError("Publish the reserved CA with the launch plan.",400);
-      if (currentBrand().kind === "launchseeds" && settings.profitPolicy?.mode === "token") throw new ApiError("Choose a profit wallet or buy and burn.",400);
+      if (!settings.publishMint) throw new ApiError("Publish the reserved CA with the launch plan.",400);
       if (settings.scheduledAt === null)
         throw new ApiError(
           "Choose a scheduled launch time and publish the wallet allocation.",

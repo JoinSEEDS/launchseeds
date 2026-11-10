@@ -6,7 +6,7 @@ import {
 } from "../../../../../lib/api-security";
 import { IngressRateLimiter } from "../../../../../lib/trusted-client";
 import { publicRouteError } from "../../../../../src/server/route-errors";
-import { getBundleEngine, getStore } from "../../../../../src/server/runtime";
+import { getStore } from "../../../../../src/server/runtime";
 import { finalizeMessage } from "../../../../../lib/bundle-message";
 import { ed25519VoteVerifier } from "../../../../../src/integrations/ed25519";
 import { address } from "../../../../../src/shared/domain";
@@ -21,11 +21,9 @@ const limiter = new IngressRateLimiter("admin-finalize", 10, 600_000);
 const MAX_AGE_MS = 5 * 60_000;
 
 /** Admin wallet: `{ wallet, issuedAt, signature }` signing finalizeMessage.
- * Every unsettled column of a user-funded launch is marked forced: the worker
- * sells it at market now (whatever its rule), resumes a stuck one from what the
- * chain shows, and pays the launch's published proceeds wallet as usual. A
- * holding LaunchSeeds protection bundle sells at market too and settles as it
- * would. The admin picks no destination. */
+ * Every unsettled column of a launch is marked forced: the worker sells it at
+ * market now (whatever its rule), resumes a stuck one from what the chain shows,
+ * and pays the launch's published proceeds wallet as usual. */
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ uid: string }> },
@@ -62,12 +60,6 @@ export async function POST(
       const saved = store.repo.userBatches.save(row.id, row.revision, JSON.stringify(UserBatchStateSchema.parse(next)), Date.now());
       results.push(`${column}: ${saved ? `finalizing from ${state.status}` : "changed meanwhile; try again"}`);
     }
-    const bundle = store.repo.launchBundles.byToken(token.id);
-    if (bundle && !bundle.external && bundle.status === "holding") {
-      const engine = await getBundleEngine();
-      if (!engine) results.push("Protection bundle: sniper protection is not running");
-      else results.push(`Protection bundle: ${await engine.closeNow(token.id, undefined, "admin")}`);
-    } else if (bundle) results.push(`Protection bundle: ${bundle.external ? "run by the launch CLI" : bundle.status}`);
     if (action === "liquidate") results.push(startLiquidation(store, token, wallet));
     if (!results.length) results.push("Nothing to finalize on this coin.");
     console.log(`Admin finalize ${token.mint} by ${wallet}: ${results.join("; ")}`);

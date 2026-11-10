@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { DEFAULT_LAUNCH_SETTINGS, canonicalLaunchSettings } from "../src/domain/launch-settings";
+import { scheduledSettings } from "./fixtures";
 import { LaunchService } from "../src/server/launch";
 import { deployerKeypair, deployerInUse, isOwnDeployer, ownDeployerName } from "../src/server/own-deployer";
 
@@ -42,7 +43,7 @@ test("the key stays until the tranches have bought", () => {
   expect(deployerInUse(repoOf([token({})], "holding"), name, now)).toBe(false);
 });
 test("a launch funded early keeps its key until its scheduled time passes", () => {
-  const settings = canonicalLaunchSettings({ ...DEFAULT_LAUNCH_SETTINGS, scheduledAt: now + 3_600_000, holderRewards: true, sniperSeconds: null, bundleLamports: 100_000_000, walletSharesBps: [3334, 3333, 3333], profitPolicy: { mode: "token" }, boost: { durationMs: 3_600_000, steps: 6 } });
+  const settings = canonicalLaunchSettings(scheduledSettings(now + 3_600_000));
   expect(deployerInUse(repoOf([token({ status: "funding", launchSettingsJson: settings })]), name, now)).toBe(true);
 });
 test("finished launches lose the key, and a missed launch expires first", () => {

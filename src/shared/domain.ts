@@ -2,7 +2,7 @@ import { validTelegram, normalizeX, validX } from "../../lib/launch-socials";
 import { TICKER_PATTERN, normalizeTicker } from "../../lib/ticker";
 import { createHash } from "node:crypto";
 import { z } from "sqlite-zod-orm";
-/** Mainnet USDC mint; never infer a treasury balance from another mint. */
+/** Mainnet USDC mint. */
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 export const hash = (text: string) =>

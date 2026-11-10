@@ -46,7 +46,6 @@ const PREPARED_PATCH = [
   "requiredLamports",
   "devBuyLamports",
   "quoteExpiresAt",
-  "activeStrategyId",
   "leaseId",
   "leaseUntil",
   "error",
@@ -54,20 +53,6 @@ const PREPARED_PATCH = [
 
 export function tokenRepo(db: SqlDb) {
   return {
-    setSnapshot(id: number, slot: number, observedAt?: number) {
-      return patchById(
-        db,
-        "tokens",
-        id,
-        {
-          holdersSnapshotSlot: slot,
-          ...(observedAt === undefined
-            ? {}
-            : { holdersSnapshotAt: observedAt }),
-        },
-        ["holdersSnapshotSlot", "holdersSnapshotAt"],
-      );
-    },
     all() {
       return records(db, "tokens", "1=1 ORDER BY createdAt DESC");
     },
@@ -155,22 +140,6 @@ export function tokenRepo(db: SqlDb) {
           .updateAll({ launcherWallet: wallet }) > 0
       );
     },
-    /** Holder-reward launch: the public market-making wallet that makes the launch buy. */
-    assignMarketMaker(id: number, address: string) {
-      return patchById(db, "tokens", id, { devBuyRecipient: address }, [
-        "devBuyRecipient",
-      ]);
-    },
-    /** Holder-reward coin gone live: its market-making wallet becomes the treasury. */
-    adoptMarketMakerTreasury(
-      id: number,
-      patch: { rewardWallet: string; fundingWalletName: string },
-    ) {
-      return patchById(db, "tokens", id, patch, [
-        "rewardWallet",
-        "fundingWalletName",
-      ]);
-    },
     /** Preparation lease, retry counters and stored launch inputs. */
     updateLaunch(id: number, patch: Partial<Token>) {
       return patchById(db, "tokens", id, patch, LAUNCH_PATCH);
@@ -190,19 +159,6 @@ export function tokenRepo(db: SqlDb) {
         patch,
         PREPARED_PATCH,
       );
-    },
-    setGovernance(
-      id: number,
-      state: Pick<
-        Token,
-        "activeStrategyId" | "leaderStrategyId" | "leaderSince"
-      >,
-    ) {
-      return patchById(db, "tokens", id, state, [
-        "activeStrategyId",
-        "leaderStrategyId",
-        "leaderSince",
-      ]);
     },
     /** Update only a still-unfunded launch. Must run within the caller's repo.tx. */
     updateUnfundedDetails(

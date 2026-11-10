@@ -80,12 +80,7 @@ test("funding panel copies exact values, watches deposits, and marks completed s
     get("copy-amount").click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(copies).toEqual(["1".repeat(32), "0.520000001"]);
-    expect(get("reward-fund-amount").textContent).toBe("0 SOL");
-    expect(get("dev-buy-step").textContent).toContain(
-      "Reward fund added to treasury",
-    );
     // No reward fund was chosen, so its step is not shown.
-    expect(get("dev-buy-step").hidden).toBe(true);
     phase = "failed";
     get("retry-launch-status").click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -100,7 +95,6 @@ test("funding panel copies exact values, watches deposits, and marks completed s
     for (const id of [
       "step-payment",
       "step-token",
-      "step-treasury",
       "step-strategy",
     ])
       expect(get(id).classList.contains("is-done")).toBe(true);

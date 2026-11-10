@@ -1,25 +1,17 @@
-import { currentBrand } from "../src/server/site-brand";
+import { SITE_NAME } from "../lib/site-brand";
 
 export default function RootLayout({ children }: { children: any }) {
-  const brand = currentBrand();
   return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#090e15" />
-        {brand.kind === "launchseeds" ? (
-          <>
-            <link rel="icon" type="image/png" href="/launchseeds-icon.png?v=2" />
-            <link rel="apple-touch-icon" href="/launchseeds-icon.png?size=180&v=2" />
-          </>
-        ) : (
-          <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1" />
-        )}
-        <title>{brand.name}</title>
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1" />
+        <title>{SITE_NAME}</title>
         <meta
           name="description"
-          content={`${brand.name} · Scheduled launches with public execution rules`}
+          content={`${SITE_NAME} · Scheduled launches with public execution rules`}
         />
       </head>
       <body>
@@ -58,15 +50,10 @@ export default function RootLayout({ children }: { children: any }) {
         <div className="wrap">
           <header className="topbar">
             <a className="brand" href="/">
-              {brand.kind === "launchseeds" ? <img className="brand__logo" src="/launchseeds-icon.png?size=256&v=2" alt="" width={28} height={28} /> : null}
-              {brand.name.toUpperCase()}
+              {SITE_NAME.toUpperCase()}
             </a>
-            {brand.kind === "launchseeds" ? <span className="addr" style={{marginLeft:"auto",minWidth:0,overflowWrap:"anywhere"}}><b>CA:</b>{brand.ca ? <a className="mono" href={`https://solscan.io/token/${brand.ca}`}>{brand.ca}</a> : <span>Not configured</span>}</span> : <>
             <nav className="nav" aria-label="Main">
               <a href="/">Launchpad</a>
-              <a href="/token">$TOKEN</a>
-              <a href="/agents">Agents</a>
-              <a href="/wallet">Verify</a>
             </nav>
             <div className="topbar__actions">
               <button className="btn btn--wallet" type="button" data-wallet-btn>
@@ -76,7 +63,6 @@ export default function RootLayout({ children }: { children: any }) {
                 Schedule Launch
               </a>
             </div>
-            </>}
           </header>
           {children}
         </div>

@@ -1,24 +1,11 @@
-import { currentBrand } from "../../src/server/site-brand";
-import { DESCRIPTION } from "../../lib/strategy";
+import { SITE_NAME } from "../../lib/site-brand";
+
 import { UserBatchControls } from "../components/user-batch-controls";
 import { solToLamports } from "../../src/shared/domain";
 import { launchTotal } from "../../lib/launch-ui";
 import { DESIGN_LAUNCH_FEE_LAMPORTS } from "../../lib/launch-presentation";
-import {
-  SNIPER_SECONDS,
-  MARKET_CAP_STOPS,
-  MAX_LIQUIDITY_SHARE,
-  LIQUIDITY_AVAILABLE,
-  BUNDLE_STOPS_SOL,
-  BUNDLE_DEFAULT_LAMPORTS,
-  BUNDLE_EXIT_PERCENTS,
-  BUNDLE_DEFAULT_EXIT_PERCENT,
-  BUNDLE_HOLD_LIMITS_MS,
-  durationText,
-} from "../../src/domain/launch-settings";
 
 export default function LaunchPage() {
-  const brand = currentBrand();
   // This is a display quote, not a readiness signal. The API independently
   // checks worker/RPC health before allowing a launch to be prepared.
   let fixedFee = DESIGN_LAUNCH_FEE_LAMPORTS;
@@ -30,7 +17,7 @@ export default function LaunchPage() {
   }
   const quotedTotal = launchTotal("0", fixedFee) || "0.02";
   return (
-    <main className="page" data-launch="" data-scheduled-launch="" data-brand={brand.kind} data-brand-name={brand.name}>
+    <main className="page" data-launch="" data-scheduled-launch="" data-brand-name={SITE_NAME}>
       <div className="page-head">
         <div>
           <h1 className="page-title">Schedule a launch</h1>
@@ -142,7 +129,7 @@ export default function LaunchPage() {
                       </span>
                       <span className="input-locked">
                         <textarea className="input" id="f-desc" name="description" rows={6} maxLength={4000} readOnly aria-readonly="true"
-                          data-default={DESCRIPTION} placeholder="Describe your project, purpose and launch plans…">{DESCRIPTION}</textarea>
+                          data-default="" placeholder="Describe your project, purpose and launch plans…"></textarea>
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b94a3" strokeWidth={2.2} strokeLinecap="round" aria-hidden="true">
                           <rect x="5" y="11" width="14" height="10" rx="2"></rect>
                           <path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
@@ -230,197 +217,15 @@ export default function LaunchPage() {
                 </p>
               </div>
             </section>
-            <section
-              className="panel toggle-panel"
-              data-toggle-panel="bundle"
-              id="sniper-protection"
-            >
-              <div className="panel__head">
-                <span className="label" id="t-bundle">
-                  02 / Protection buy
-                </span>
-                <button
-                  className="switch"
-                  type="button"
-                  role="switch"
-                  aria-checked="true"
-                  aria-labelledby="t-bundle"
-                  data-switch=""
-                  hidden
-                ></button>
-              </div>
-              <p
-                className="protection-budget"
-                id="bundle-capacity"
-                role="status"
-              >
-                Checking available protection…
-              </p>
-              <div className="toggle-panel__body">
-                <div className="readout">
-                  <b data-bundle-out="">0.5 SOL</b>
-                  <span>bought at launch</span>
-                </div>
-                <div className="slider" style={{ "--lo": "0%", "--hi": "33%" }}>
-                  <input
-                    type="range"
-                    min="0"
-                    max={String(BUNDLE_STOPS_SOL.length - 1)}
-                    step="1"
-                    value={String(
-                      BUNDLE_STOPS_SOL.indexOf(
-                        (BUNDLE_DEFAULT_LAMPORTS / 1e9) as never,
-                      ),
-                    )}
-                    data-bundle=""
-                    id="f-bundle"
-                    aria-label="Sniper protection size in SOL"
-                  />
-                </div>
-                <div className="ticks" id="bundle-ticks">
-                  {BUNDLE_STOPS_SOL.map((sol) => (
-                    <span>{String(sol)}</span>
-                  ))}
-                </div>
-                <div className="allocation-heading">
-                  <span className="label label--sm">
-                    Distribute 100% across the wallets
-                  </span>
-                  <b id="allocation-total">100%</b>
-                </div>
-                <div className="plan-wallets allocation-inputs">
-                  {["33.34", "33.33", "33.33"].map((value, i) => (
-                    <label className="plan-wallet field">
-                      <span className="label label--sm">Wallet {i + 1}</span>
-                      <span className="amount__input">
-                        <input
-                          className="input"
-                          id={`f-wallet-share-${i}`}
-                          type="number"
-                          min="0.01"
-                          max="99.98"
-                          step="0.01"
-                          value={value}
-                          aria-label={`Wallet ${i + 1} allocation percent`}
-                        />
-                        <span>%</span>
-                      </span>
-                      <output id={`wallet-buy-${i}`}>Calculating...</output>
-                    </label>
-                  ))}
-                </div>
-                <p className="setting-help">
-                  Each wallet must buy at least 0.03 SOL. Allocations must total
-                  100%.
-                </p>
-                <div className="field" id="legacy-exit-controls">
-                  <span className="label label--sm" id="l-exit">
-                    Profit target per wallet (before costs)
-                  </span>
-                  <div className="chips" role="group" aria-labelledby="l-exit">
-                    {BUNDLE_EXIT_PERCENTS.map((value) => (
-                      <button
-                        className="chip"
-                        type="button"
-                        data-exit={String(value)}
-                        aria-pressed={String(
-                          value === BUNDLE_DEFAULT_EXIT_PERCENT,
-                        )}
-                      >{`+${value - 100}%`}</button>
-                    ))}
-                  </div>
-                </div>
-                <details className="execution-details">
-                  <summary>How execution works</summary>
-                  <ol
-                    className="bundle-how"
-                    id="bundle-how"
-                    aria-label="How sniper protection works"
-                  >
-                    <li>
-                      Your coin is created and <b data-how-size="">0.5 SOL</b>{" "}
-                      of it is bought in the same Jito bundle, from three new
-                      public wallets funded by LaunchSeeds. No sniper can buy before
-                      them.
-                    </li>
-                    <li>
-                      Prepared sales execute together once every wallet can
-                      receive <b data-how-exit="">102%</b> of its buy (
-                      <b data-how-back="">0.51 SOL</b> in all).
-                    </li>
-                    <li data-how-hold="" hidden>
-                      If that hasn't happened after <b data-how-limit="">24h</b>
-                      , they sell at market.
-                    </li>
-                    <li>
-                      Each wallet's buy, allocation and minimum sale return are
-                      published before launch.
-                    </li>
-                    <li>
-                      Realized profit follows the destination in your published
-                      plan, after execution costs.
-                    </li>
-                    <li>
-                      You pay only <strong id="bundle-fee">0.015 SOL</strong>{" "}
-                      (3%). The buy itself is LaunchSeeds's money and returns to
-                      LaunchSeeds.
-                    </li>
-                  </ol>
-                </details>
-              </div>
-            </section>
-
             <section className="panel" id="fee-mode-controls">
   <div className="panel__head"><span className="label">Trading fees</span></div>
   <div className="panel__body stack">
-    <label className="field"><span>Fee destination</span><select className="input" id="f-fee-mode"><option value="holders">Holder rewards (default)</option><option value="creator">Creator fees to a wallet</option></select></label>
-    <label className="field" id="creator-fees-field" hidden><span>Creator-fee wallet</span><input className="input mono" id="f-fees-to" placeholder="Solana public address" autoComplete="off" spellCheck={false}/></label>
+    <label className="field" id="creator-fees-field"><span>Creator-fee wallet</span><input className="input mono" id="f-fees-to" placeholder="Solana public address" autoComplete="off" spellCheck={false}/></label>
     <label className="field"><span>Deployer private key (optional)</span><input className="input mono" id="f-deployer-key" type="password" placeholder="Empty: a new wallet deploys" autoComplete="off" spellCheck={false}/></label>
-    <p className="setting-help">Pump pays trading fees to holders in holder-reward mode. Creator-fee mode uses the wallet you enter instead. This choice is published with the reserved CA and locks when payment arrives.</p>
+    <p className="setting-help">The coin's creator fees go to this wallet. It is published with the reserved CA and locks when payment arrives.</p>
   </div>
 </section>
 <UserBatchControls />
-<section className="panel" id="profit-controls">
-              <div className="panel__head">
-                <span className="label">03 / Profit destination</span>
-              </div>
-              <div className="panel__body stack">
-                <label className="field">
-                  <span className="label label--sm">
-                    After the protection wallets sell
-                  </span>
-                  <select className="input" id="f-profit-mode">
-                    <option value="burn">Buy this token &amp; burn</option>
-                    <option value="wallet">Send SOL to a wallet</option>
-                    {brand.kind === "launchseeds" ? <option value="token">Buy back for a $TOKEN holder (approval required)</option> : null}
-                    <option value="cashback" disabled>
-                      Cashback to holders - rules pending
-                    </option>
-                  </select>
-                </label>
-                <fieldset className="stack" id="boost-controls" style={{minWidth:0,margin:0,padding:0,border:0}}>
-  <legend className="label label--sm">BOOST / post-sale buybacks</legend>
-  <label className="field"><span>Duration in minutes</span><input className="input" id="f-boost-minutes" type="number" min="1" max="43200" step="1" value="1440" /></label>
-  <label className="field"><span>Maximum number of buys</span><input className="input" id="f-boost-steps" type="number" min="1" max="100" step="1" value="24" /></label>
-  <p className="setting-help">Starts after the protection sale settles. Use 5 minutes for a short BOOST or 1440 for 24 hours. Purchases are evenly scheduled; small budgets use fewer buys. One buy executes immediately. This does not buy to trigger the protection sale.</p>
-</fieldset>
-<label className="field" id="profit-wallet-field" hidden>
-                  <span className="label label--sm">Profit wallet</span>
-                  <input
-                    className="input mono"
-                    id="f-profit-wallet"
-                    placeholder="Solana address"
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                </label>
-                <p className="setting-help">
-                  LaunchSeeds's capital returns to the fund. Only realized profit is
-                  routed, after costs. The destination locks when payment
-                  arrives.
-                </p>
-              </div>
-            </section>
           </form>
 
           <div id="funded-plan-preview" hidden></div>
@@ -567,14 +372,6 @@ export default function LaunchPage() {
                     Pay in Wallet
                   </button>
                   <button
-                    className="btn btn--accent retired-free-launch"
-                    type="button"
-                    id="free-launch"
-                    hidden
-                  >
-                    Mine Free Launch
-                  </button>
-                  <button
                     className="btn"
                     type="button"
                     id="edit-launch-details"
@@ -592,13 +389,6 @@ export default function LaunchPage() {
                   role="status"
                   aria-live="polite"
                 ></p>
-                <p
-                  className="opt-note"
-                  id="free-launch-status"
-                  role="status"
-                  aria-live="polite"
-                  hidden
-                ></p>
                 <div
                   className="bar"
                   id="deposit-progress"
@@ -611,74 +401,6 @@ export default function LaunchPage() {
                 >
                   <i />
                 </div>
-              </div>
-            </div>
-
-            <div className="mine" id="mine" hidden>
-              <div className="mine__head">
-                <span className="mine__text">
-                  <b id="mine-title">Mine a free launch</b>
-                  <span id="mine-sub"></span>
-                </span>
-                <button
-                  className="btn btn--primary"
-                  type="button"
-                  id="mine-start"
-                >
-                  Start Mining
-                </button>
-                <button className="btn" type="button" id="mine-stop" hidden>
-                  Stop
-                </button>
-              </div>
-              <div className="mine__stats" id="mine-stats" hidden>
-                <div>
-                  <div className="label label--sm">Speed</div>
-                  <b id="mine-speed">—</b>
-                </div>
-                <div>
-                  <div className="label label--sm">Hashes</div>
-                  <b id="mine-hashes">0</b>
-                </div>
-                <div>
-                  <div className="label label--sm">Time</div>
-                  <b id="mine-time">0:00</b>
-                </div>
-                <div>
-                  <div className="label label--sm">Expected</div>
-                  <b id="mine-expected">—</b>
-                </div>
-              </div>
-              <div className="mine__hashes mono" id="mine-rows" hidden>
-                <span>
-                  <i>Target</i>
-                  <span id="mine-target"></span>
-                </span>
-                <span>
-                  <i>Best</i>
-                  <span id="mine-best">—</span>
-                </span>
-                <span>
-                  <i>Now</i>
-                  <span id="mine-now">—</span>
-                </span>
-              </div>
-              <div className="wide-bar mine__bar" id="mine-bar" hidden>
-                <div
-                  className="bar"
-                  role="progressbar"
-                  aria-label="Share of expected work done"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                >
-                  <i id="mine-work" />
-                </div>
-                <small>
-                  <span id="mine-work-text">0% of expected work</span>
-                  <span>
-                    Free launch pool <b id="mine-pool">—</b>
-                  </span>
-                </small>
               </div>
             </div>
 
@@ -740,12 +462,7 @@ export default function LaunchPage() {
                 Payment received
               </li>
               <li id="step-token">Token created</li>
-              <li id="step-treasury">Protection wallets prepared</li>
               <li id="step-strategy">Published plan recorded</li>
-              <li id="dev-buy-step">
-                Reward fund added to treasury:{" "}
-                <span id="reward-fund-amount">0 SOL</span>
-              </li>
             </ol>
             <div className="ballot-foot">
               <p data-launch-msg="" aria-live="polite" id="payment-status">
@@ -808,7 +525,7 @@ export default function LaunchPage() {
                 <dt>Launch fee</dt>
                 <dd id="summary-fee">{`${(fixedFee / 1e9).toFixed(2)} SOL`}</dd>
                 <dt data-summary-bundle="" hidden id="summary-bundle-label">
-                  Sniper protection (3%)
+                  Launch buys
                 </dt>
                 <dd data-summary-bundle="" hidden id="summary-bundle-fee">
                   0 SOL

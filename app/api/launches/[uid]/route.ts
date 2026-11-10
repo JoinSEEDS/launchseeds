@@ -1,14 +1,8 @@
-import { currentBrand } from "../../../../src/server/site-brand";
 import {
   ApiError,
   requireSameOrigin,
   readBoundedJson,
 } from "../../../../lib/api-security";
-import {
-  normalizeStrategy,
-  assertStrategyAllowed,
-} from "../../../../lib/strategy";
-import { persistConfig } from "../../../../lib/governance";
 import { parseLaunchSettings } from "../../../../src/domain/launch-settings";
 import { getOperationalLaunchReadiness } from "../../../../src/server/launch-health";
 import type { LaunchInput } from "../../../../src/shared/domain";
@@ -46,16 +40,10 @@ export async function PATCH(request: Request): Promise<Response> {
       32_768,
     );
     let settings;
-    let firstStrategy = null;
     try {
       settings = parseLaunchSettings(payload.settings);
-      if (currentBrand().kind === "launchseeds" && !settings.publishMint) throw new ApiError("Publish the reserved CA with the launch plan.",400);
-      if (currentBrand().kind === "launchseeds" && settings.profitPolicy?.mode === "token") throw new ApiError("Choose a profit wallet or buy and burn.",400);
-      if (settings.scheduledAt === null) {
-        const proposed = await normalizeStrategy(payload.firstStrategy);
-        assertStrategyAllowed(proposed, settings.holderRewards);
-        firstStrategy = persistConfig(proposed);
-      }
+      if (!settings.publishMint) throw new ApiError("Publish the reserved CA with the launch plan.",400);
+      if (settings.scheduledAt === null) throw new ApiError("Choose a scheduled launch time.", 400);
     } catch (error) {
       throw new ApiError(
         error instanceof Error ? error.message : "Invalid launch choices",
@@ -66,7 +54,7 @@ export async function PATCH(request: Request): Promise<Response> {
       request.headers.get("authorization")?.replace(/^Bearer /, "") || "";
     if (!/^[a-f0-9]{64}$/.test(capability))
       throw new ApiError("A valid launch session is required to edit.", 401);
-    const { firstStrategy: _first, settings: _settings, ...fields } = payload;
+    const { settings: _settings, ...fields } = payload;
     const status = await (
       await getLaunchService()
     ).amend(
@@ -74,7 +62,6 @@ export async function PATCH(request: Request): Promise<Response> {
       { ...fields } as LaunchInput,
       capability,
       settings,
-      firstStrategy,
     );
     return apiJson(status);
   } catch (error) {

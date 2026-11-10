@@ -25,11 +25,6 @@ import { Database } from "bun:sqlite";
 import { isOwnDeployer } from "./own-deployer";
 import { createRpcConnection, rpcFetch } from "./rpc-pacing";
 import { lastKnownSolUsd, rememberSolUsd } from "./sol-price";
-import {
-  holderRewardLaunchInstructions,
-  marketMakerWalletName,
-} from "./holder-reward-launch";
-import { BundleEngine } from "./bundle-engine";
 import { UserBatchEngine, UserBatchStateSchema } from "./user-batch-engine";
 import { createUserBatchChain } from "./user-batch-solard";
 import { TRANCHE_ROW_OFFSET } from "../domain/user-funded-batches";
@@ -37,15 +32,8 @@ import { assignFreshWallets, busyLaunchWallets, settledFreshWallets, slotKey } f
 import { storedLaunchSettings } from "../domain/launch-settings";
 import { scheduledCommitment } from "../domain/scheduled-plan";
 import { hash } from "../shared/domain";
-import { createBundleChain } from "./bundle-chain-solard";
-import { BundleRewardEngine } from "./bundle-reward";
-import { createRewardChain } from "./bundle-reward-solard";
 import { bundleWalletName, type BundleBuyer } from "./launch-bundle";
 import { poolWallets, reuseWalletPool } from "./wallet-pool";
-import {
-  assertProtectionBudget,
-  refreshProtectionBudget,
-} from "./protection-budget";
 import {
   executeBundle,
   prepareBundle,
@@ -185,7 +173,7 @@ export class SolardSource {
         "confirmed",
       )) < 10_000
     )
-      throw new Error("Treasury needs SOL for the initial claim network fee");
+      throw new Error("The fee wallet needs SOL for the claim network fee");
     const result = await trader.claims.creatorFees.claim(mint, wallet, { id });
     if (result.receipt.status !== "confirmed")
       throw new Error(
@@ -295,62 +283,27 @@ export class SolardLaunchProvider implements LaunchProvider {
         trader: v1 as unknown as BundleTrader,
         wallet: (name) => provider.walletFor(name),
       };
-      const capital = provider.walletFor(
-        process.env.LAUNCHSEEDS_BUNDLE_CAPITAL_WALLET || "launchseeds-bundle-capital",
-      ).address;
-      const chain = createBundleChain(provider.bundleContext, {
-        capitalWallet: capital,
-        ownerWallet: process.env.LAUNCHSEEDS_FUND_OWNER_WALLET?.trim() || null,
-      });
-      provider.bundles = new BundleEngine(store.repo, chain);
-      if (process.env.LAUNCHSEEDS_USER_BATCHES === "true") {
-        provider.batchEngine = new UserBatchEngine(store.repo,createUserBatchChain(provider.bundleContext,store.repo,async mint=>{
-          await provider.sdk.addToken(mint);
-          return (provider.sdk as unknown as {resolveToken(mint:string):unknown}).resolveToken(mint);
-        },solUsd));
-        provider.bundles.userBatches=provider.batchEngine;
-      }
-      // Profitable sales buy their coin back for a $TOKEN holder.
-      const tokenMint = process.env.LAUNCHSEEDS_TOKEN_MINT?.trim();
-      provider.bundles.rewards = new BundleRewardEngine(
-        store,
-        createRewardChain(provider.bundleContext, chain, capital),
-        {
-          tokenMint: tokenMint || "",
-          excluded: [process.env.LAUNCHSEEDS_FUND_OWNER_WALLET?.trim() ?? ""],
-        },
-      );
+      provider.batchEngine = new UserBatchEngine(store.repo,createUserBatchChain(provider.bundleContext,store.repo,async mint=>{
+        await provider.sdk.addToken(mint);
+        return (provider.sdk as unknown as {resolveToken(mint:string):unknown}).resolveToken(mint);
+      },solUsd));
     }
     return provider;
   }
   /** Solard's vanity-mint pool functions (loaded by create()). */
   vanityPool: VanityPool | null = null;
-  /** Sniper-protection bundles ([launchseeds] launch_bundles = true). */
-  bundles: BundleEngine | null = null;
+  /** Launch columns and tranches: buys, exits and payouts. */
   batchEngine: UserBatchEngine | null = null;
+  get bundles() { return this.batchEngine; }
   get userBatches() { return this.batchEngine !== null; }
   async validateUserBatchLayout(input:Parameters<NonNullable<LaunchProvider["validateUserBatchLayout"]>>[0]) {
     if(!this.batchEngine||!this.bundleContext)throw Error("User-funded batch validation is not enabled");
     const mint=input.token.mintSignerRef?.replace(/^launchseeds-mint-/,"");if(!mint)throw Error("Reserved mint missing");
     // Compile the real creation and grouped buys before publishing payment.
     // These unsent validation bytes are never returned to the browser.
-    await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint,metadata:{name:input.token.name,symbol:input.token.symbol,uri:input.metadataUri},devBuyLamports:input.settings.bundleLamports!,buyers:input.buyers.filter(b=>b.tranche===undefined),userFunded:true,...(input.settings.feesTo?{feesTo:input.settings.feesTo}:{})});
+    await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint,metadata:{name:input.token.name,symbol:input.token.symbol,uri:input.metadataUri},devBuyLamports:input.settings.bundleLamports!,buyers:input.buyers.filter(b=>b.tranche===undefined),...(input.settings.feesTo?{feesTo:input.settings.feesTo}:{})});
   }
   bundleContext: BundleContext | null = null;
-  checkProtectionBudget(
-    lamports: number | null | undefined,
-    exceptTokenId?: number,
-  ) {
-    assertProtectionBudget(this.store, lamports, exceptTokenId);
-  }
-  async refreshProtectionBudget() {
-    if (this.bundles)
-      await refreshProtectionBudget(
-        this.store,
-        this.connection,
-        this.bundles.chain.capitalWallet,
-      );
-  }
   walletFor(name: string) {
     return this.findOrCreateWallet(name);
   }
@@ -439,9 +392,6 @@ export class SolardLaunchProvider implements LaunchProvider {
   /** Wallet names are the idempotency key. After a racing create failure,
    * re-read the persisted wallet rather than generating a different address. */
   /** An agent's own wallet. Its key stays in the wallet store, never in agent context. */
-  agentWallet(slug: string) {
-    return this.findOrCreateWallet(`agent-${slug}`).address;
-  }
   private findOrCreateWallet(name: string) {
     const existing = this.sdk.listWallets().find((item) => item.name === name);
     if (existing) return existing;
@@ -489,10 +439,6 @@ export class SolardLaunchProvider implements LaunchProvider {
       throw new Error("Launch mint wallet is missing from the wallet store");
     return wallet.address;
   }
-  /** Address of a named treasury wallet (created on first use). */
-  treasuryAddress(name: string): string {
-    return this.findOrCreateWallet(name).address;
-  }
   async balanceLamports(address: string): Promise<number> {
     return await this.connection.getBalance(
       new PublicKey(address),
@@ -501,7 +447,7 @@ export class SolardLaunchProvider implements LaunchProvider {
   }
   /** Builds and simulates a signed SOL transfer from a named wallet; does not send. */
   async prepareSolTransfer(fromName: string, to: string, lamports: number) {
-    const from = this.treasuryAddress(fromName);
+    const from = this.walletFor(fromName).address;
     const plan = await this.sdk
       .transaction(from)
       .addMany([
@@ -513,7 +459,7 @@ export class SolardLaunchProvider implements LaunchProvider {
       ])
       .build();
     if (!(await this.sdk.simulatePlan(plan)).success)
-      throw new Error("Treasury transfer simulation failed");
+      throw new Error("SOL transfer simulation failed");
     return {
       transaction: Buffer.from(plan.transaction.serialize()).toString("base64"),
       signature: bs58.encode(plan.transaction.signatures[0]!),
@@ -727,7 +673,7 @@ export class SolardLaunchProvider implements LaunchProvider {
         const buyers=JSON.parse(plan.buyersJson) as import("./launch-bundle").BundleBuyer[];
         if(hash(JSON.stringify(scheduledCommitment(scheduledToken,choices,buyers)))!==plan.planHash)throw Error("Batch commitment does not match execution");
         // Tranche wallets buy after the launch, outside the bundle.
-        const intent=await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint:mintWallet.address,metadata:{name:input.name,symbol:input.symbol,uri:input.metadataUri},devBuyLamports:input.bundleLamports,buyers:buyers.filter(b=>b.tranche===undefined),userFunded:true,...(choices.feesTo?{feesTo:choices.feesTo}:{})});
+        const intent=await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint:mintWallet.address,metadata:{name:input.name,symbol:input.symbol,uri:input.metadataUri},devBuyLamports:input.bundleLamports,buyers:buyers.filter(b=>b.tranche===undefined),...(choices.feesTo?{feesTo:choices.feesTo}:{})});
         this.store.repo.tx(tx=>{
           const existing=tx.userBatches.byToken(input.tokenId);
           const tranches=choices.userBatches!.tranches??[];
@@ -741,28 +687,10 @@ export class SolardLaunchProvider implements LaunchProvider {
         });
         return {intent:JSON.stringify(intent),mintSignerRef};
       }
-      if (!this.bundles)
-        throw new Error("Sniper protection is not available right now");
-      const token = this.store.repo.tokens.get(input.tokenId);
-      if (!token) throw new Error("Launch request not found");
-      const result = await this.bundles.prepareLaunch(token, {
-        fundingWallet: input.fundingWallet,
-        metadata: {
-          name: input.name,
-          symbol: input.symbol,
-          uri: input.metadataUri,
-        },
-        bundleLamports: input.bundleLamports,
-      });
-      if ("wait" in result) return { wait: result.wait, mintSignerRef };
-      return { intent: JSON.stringify(result.intent), mintSignerRef };
+      throw new Error("Every launch buys through its columns");
     }
     if (input.holderRewards)
-      return this.prepareHolderRewardDeployment(
-        input,
-        mintSignerRef,
-        mintWallet.address,
-      );
+      throw new Error("Holder-reward launches are not supported");
     const deployment = await this.sdk.prepareTokenDeployment(
       "pump",
       input.fundingWallet,
@@ -796,97 +724,6 @@ export class SolardLaunchProvider implements LaunchProvider {
       mintSignerRef,
     };
   }
-  /** Holder-reward coin, created and first bought by its public market-making wallet. */
-  private async prepareHolderRewardDeployment(
-    input: {
-      fundingWallet: string;
-      metadataUri: string;
-      name: string;
-      symbol: string;
-      devBuyLamports: number;
-      feesTo?: string | null;
-    },
-    mintSignerRef: string,
-    mint: string,
-  ) {
-    // `fundingWallet` is the funding wallet's address (a Solard wallet ref).
-    const fundingAddress = input.fundingWallet;
-    if (input.devBuyLamports === 0) {
-      // Plain holder-reward coin: created by its funding (dev) wallet, no buy.
-      // With a fee address, that wallet is the creator and holders get none.
-      const pump = await import("@pump-fun/pump-sdk");
-      const create = await pump.PUMP_SDK.createV2Instruction({
-        mint: new PublicKey(mint),
-        user: new PublicKey(fundingAddress),
-        creator: new PublicKey(input.feesTo ?? fundingAddress),
-        name: input.name,
-        symbol: input.symbol,
-        uri: input.metadataUri,
-        mayhemMode: false,
-        cashback: false,
-        holderReward: !input.feesTo,
-      });
-      return await this.signV1Launch(
-        fundingAddress,
-        [create],
-        [fundingAddress, mint],
-        mint,
-        mintSignerRef,
-      );
-    }
-    const marketMaker = this.findOrCreateWallet(
-      marketMakerWalletName(mint),
-    ).address;
-    const { instructions } = await holderRewardLaunchInstructions({
-      connection: this.connection,
-      mint: new PublicKey(mint),
-      name: input.name,
-      symbol: input.symbol,
-      uri: input.metadataUri,
-      fundingWallet: new PublicKey(fundingAddress),
-      marketMaker: new PublicKey(marketMaker),
-      buyLamports: input.devBuyLamports,
-    });
-    // A v1 transaction (up to 4096 bytes) fits the launch without a lookup table.
-    const { buildV1Transaction } = await loadWireTransaction();
-    const { blockhash, lastValidBlockHeight } =
-      await this.connection.getLatestBlockhash("confirmed");
-    const transaction = await buildV1Transaction(
-      new PublicKey(fundingAddress),
-      {
-        instructions,
-        signers: [],
-        actions: [],
-        trackedAccounts: [],
-        cuLimit: 400_000,
-      },
-      blockhash,
-      lastValidBlockHeight,
-    );
-    await transaction.sign(
-      [
-        this.sdk.signer(fundingAddress),
-        this.sdk.signer(marketMaker),
-        this.sdk.signer(mint),
-      ],
-      lastValidBlockHeight,
-    );
-    const bytes = transaction.serialize();
-    const simulation = await this.simulateWire(bytes);
-    if (simulation)
-      throw new Error(`Holder-reward launch simulation failed: ${simulation}`);
-    return {
-      intent: JSON.stringify({
-        transaction: Buffer.from(bytes).toString("base64"),
-        signature: bs58.encode(transaction.signatures[0]!),
-        mint,
-        lastValidBlockHeight,
-      }),
-      mintSignerRef,
-      marketMaker,
-    };
-  }
-  /** Signed simulation of raw transaction bytes (any wire version); the error, or null. */
   private async simulateWire(bytes: Uint8Array): Promise<string | null> {
     const response = await rpcFetch(this.rpcUrl, {
       method: "POST",
@@ -956,7 +793,7 @@ export class SolardLaunchProvider implements LaunchProvider {
     const bundle = parseBundleIntent(intent);
     if (bundle) {
       if (!this.bundleContext)
-        throw new Error("Sniper protection is not available right now");
+        throw new Error("Launch columns are not available right now");
       return await executeBundle(this.bundleContext, bundle);
     }
     const plan = JSON.parse(intent) as {
@@ -1014,7 +851,7 @@ export class SolardLaunchProvider implements LaunchProvider {
     const bundle = parseBundleIntent(intent);
     if (bundle) {
       if (!this.bundleContext || !bundle.fundingWallet)
-        throw new Error("Sniper protection is not available right now");
+        throw new Error("Launch columns are not available right now");
       const total = bundle.buyers.reduce(
         (sum, b) => sum + Number(b.budgetLamports),
         0,

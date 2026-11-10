@@ -24,7 +24,7 @@ async function loadJsxAi(): Promise<JsxAi & JsxRuntime> {
 }
 
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
-/** House style ($TOKEN logo): every generated token icon should look like a sibling of it. */
+/** House style: every generated token icon should look like a sibling of this reference. */
 export const STYLE_REFERENCE = resolve(
   import.meta.dir,
   "assets/image-style-reference.png",

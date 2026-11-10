@@ -136,7 +136,6 @@ export function transition<T extends Record<string, unknown>>(
 const boolFields = {
   holders: ["excluded"],
   strategies: ["enabled"],
-  packs: ["available"],
 } as const;
 export function decode<K extends keyof Tables>(
   table: K,

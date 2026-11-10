@@ -2,27 +2,15 @@ import { expect, test } from "bun:test";
 import { renderToString } from "tradjs/server/ssr";
 import { JSDOM } from "jsdom";
 import LaunchPage from "../app/launch/page";
-test("new launch UI is schedule, allocation and profit policy without retired controls", () => {
+test("the launch form is a schedule and launch columns, without retired controls", () => {
   const dom = new JSDOM(renderToString(<LaunchPage />));
   try {
     const d = dom.window.document;
     expect(d.getElementById("f-scheduled-at")?.getAttribute("type")).toBe(
       "datetime-local",
     );
-    for (const i of [0, 1, 2])
-      expect(d.getElementById(`f-wallet-share-${i}`)).not.toBeNull();
-    const shares = [0, 1, 2].map((i) =>
-      Number(
-        (d.getElementById(`f-wallet-share-${i}`) as HTMLInputElement).value,
-      ),
-    );
-    expect(Math.round(shares.reduce((a, b) => a + b, 0) * 100)).toBe(10000);
-    expect(d.getElementById("f-profit-mode")?.textContent).toContain(
-      "Buy this token & burn",
-    );
-    expect(
-      d.querySelector('option[value="cashback"]')?.hasAttribute("disabled"),
-    ).toBe(true);
+    expect(d.getElementById("user-batch-controls")?.hidden).toBe(false);
+    expect(d.getElementById("f-fees-to")).not.toBeNull();
     for (const id of [
       "advanced-settings",
       "sniper-puzzle",
@@ -30,6 +18,14 @@ test("new launch UI is schedule, allocation and profit policy without retired co
       "first-strategy-root",
       "reward-fund",
       "creator-fees",
+      "sniper-protection",
+      "f-bundle",
+      "f-wallet-share-0",
+      "f-profit-mode",
+      "f-fee-mode",
+      "boost-controls",
+      "free-launch",
+      "mine",
     ])
       expect(d.getElementById(id)).toBeNull();
     expect(d.querySelectorAll("#payment-address")).toHaveLength(1);

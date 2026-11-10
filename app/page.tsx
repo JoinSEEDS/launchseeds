@@ -20,8 +20,8 @@ export function renderHomePage(store: ReturnType<typeof getStore>, input?: Catal
             <span>Before the launch.</span>
           </h1>
           <p>
-            Scheduled launches with public protection wallets, fixed sell
-            targets and a profit destination chosen in advance.
+            Scheduled launches whose buy wallets and sell rules are published
+            before the coin exists.
           </p>
           <a className="btn btn--primary" href="/launch">
             Schedule a launch <span aria-hidden="true">&#8599;</span>

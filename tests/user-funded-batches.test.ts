@@ -28,7 +28,7 @@ test("one to four columns, one to four slots each, at least 0.03 SOL per slot", 
 });
 
 test("settings require the launch buy to equal the columns' slots", () => {
-  const base = { ...DEFAULT_LAUNCH_SETTINGS, scheduledAt: 1_000, holderRewards: true, sniperSeconds: null, profitPolicy: { mode: "wallet" as const, wallet: proceedsWallet } };
+  const base = { ...DEFAULT_LAUNCH_SETTINGS, scheduledAt: 1_000, feesTo: "3".repeat(32) };
   const userBatches = { columns: columns.slice(0, 2), proceedsWallet };
   expect(parseLaunchSettings({ ...base, userBatches, bundleLamports: 180_000_000 }).userBatches?.columns).toHaveLength(2);
   expect(() => parseLaunchSettings({ ...base, userBatches, bundleLamports: 190_000_000 })).toThrow();

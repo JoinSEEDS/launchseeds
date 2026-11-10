@@ -1,6 +1,5 @@
-/** Solard wiring for the sniper-protection launch bundle (launch-bundle.ts):
- * builds, simulates and signs the four transactions, persists them as the launch
- * intent, submits them as one Jito bundle and reconciles their signatures. */
+/** Solard wiring for the launch bundle (launch-bundle.ts): one Jito bundle that
+ * creates the coin and runs each column's buy transaction. */
 import {
   Connection,
   PublicKey,
@@ -14,8 +13,6 @@ import {
   V1_PACKET_LIMIT,
   bundleWalletName,
   fundBuyers,
-  splitBudget,
-  allocatedBudget,
   type BundleBuyer,
   type BundleIntent,
 } from "./launch-bundle";
@@ -161,41 +158,22 @@ export async function prepareBundle(
     mint: string;
     metadata: { name: string; symbol: string; uri: string };
     devBuyLamports: number;
-    walletSharesBps?: readonly number[];
-    /** Dry run: simulate with this funded address as the creator and stop (nothing is signed). */
-    simulateAs?: string;
-    /** Wallets that buy with their own SOL (LaunchSeeds's rotating slots); otherwise
-     * new bundle wallets are funded from the launch's funding wallet. */
-    buyers?: BundleBuyer[];
-    /** Creator-fee recipient instead of holder rewards (e.g. the owner wallet). */
+    /** The columns' wallets: each column's signer first, then its fresh wallets. */
+    buyers: BundleBuyer[];
+    /** Creator-fee recipient instead of holder rewards. */
     feesTo?: string;
-    /** Funds the bundle wallets (co-signs creation) instead of the funding wallet. */
-    capitalWallet?: string;
-    userFunded?: boolean;
   },
 ): Promise<BundleIntent> {
   const pump = await import("@pump-fun/pump-sdk");
   const core = await coreOf(ctx);
   const mint = new PublicKey(input.mint);
-  const funding = new PublicKey(input.simulateAs ?? input.fundingWallet);
+  const funding = new PublicKey(input.fundingWallet);
   const global = await new pump.OnlinePumpSdk(ctx.connection).fetchGlobal();
   const feesTo = input.feesTo ? new PublicKey(input.feesTo) : null;
   if (!feesTo && !global.isHolderRewardEnabled)
     throw new Error("Pump holder-reward coins are disabled right now");
 
-  const buyers: BundleBuyer[] =
-    input.buyers ??
-    (input.walletSharesBps
-      ? allocatedBudget(BigInt(input.devBuyLamports), input.walletSharesBps)
-      : splitBudget(BigInt(input.devBuyLamports))
-    ).map((budget, i) => {
-      const name = bundleWalletName(input.mint, i);
-      return {
-        name,
-        wallet: ctx.wallet(name).address,
-        budgetLamports: budget.toString(),
-      };
-    });
+  const buyers = input.buyers;
   const mintSigner = ctx.trader.signer(input.mint);
   const create = await pump.PUMP_SDK.createV2Instruction({
     mint,
@@ -237,55 +215,29 @@ export async function prepareBundle(
     state = buy.nextState; // sequential: each buy moves the curve for the next
     buys.push(buy.instructions);
   }
-  const funder = input.capitalWallet
-    ? new PublicKey(input.capitalWallet)
-    : funding;
-  const creation =
-    input.buyers && !input.capitalWallet && !input.userFunded
-      ? [create]
-      : [
-          create,
-          ...fundBuyers(
-            funder,
-            buyers.map((b) => ({
-              wallet: b.wallet,
-              budgetLamports: BigInt(b.budgetLamports),
-            })),
-          ),
-        ];
-
-  // Legacy's three buys fit a single-bank check. A grouped launch can exceed
-  // one transaction's limits while fitting its four actual bundle transactions.
-  // Its cumulative quotes and actual compiled groups are checked below; Jito
-  // validates the complete bundle before inclusion.
-  if (!input.userFunded) {
-    const { buildV1Transaction } = await wireOf(ctx);
-    const latest = await ctx.connection.getLatestBlockhash("confirmed");
-    const combined = await buildV1Transaction(funding,{...draft([...creation,...buys.flat()]),cuLimit:1_400_000} as never,latest.blockhash,latest.lastValidBlockHeight);
-    const problem=await simulateRaw(ctx.rpcUrl,combined.serialize(),false);
-    if(problem)throw new Error(`Launch bundle simulation failed: ${problem}`);
-    if(input.simulateAs)throw new Error(`DRY-RUN-OK: create + ${buyers.length} buys simulated (${combined.serialize().length} bytes combined)`);
-  } else if(input.simulateAs)throw Error("Grouped validation must use the published funding and buyer addresses");
+  // The funding wallet creates the coin and sends every wallet its buy and reserve.
+  const creation = [
+    create,
+    ...fundBuyers(
+      funding,
+      buyers.map((b) => ({ wallet: b.wallet, budgetLamports: BigInt(b.budgetLamports) })),
+    ),
+  ];
 
   const tips = await core.getJitoTipAccounts();
   const tip = new PublicKey(tips[Math.floor(Math.random() * tips.length)]!);
   const { SystemProgram } = await import("@solana/web3.js");
-  // User-funded: one transaction per column, signed and paid by the column's
-  // signer (its first slot) with the column's fresh wallets co-signing.
+  // One transaction per column, signed and paid by the column's signer (its
+  // first slot) with the column's fresh wallets co-signing.
   const columns = [...new Set(buyers.map((buyer) => buyer.batchIndex ?? 0))].sort((a, b) => a - b);
-  const groups = input.userFunded
-    ? columns.map((batchIndex) => buyers.map((buyer, index) => ({ buyer, index })).filter((entry) => entry.buyer.batchIndex === batchIndex)
-        .sort((a, b) => Number(b.buyer.role === "signer") - Number(a.buyer.role === "signer")))
-    : buyers.map((buyer, index) => [{ buyer, index }]);
+  const groups = columns.map((batchIndex) => buyers.map((buyer, index) => ({ buyer, index })).filter((entry) => entry.buyer.batchIndex === batchIndex)
+    .sort((a, b) => Number(b.buyer.role === "signer") - Number(a.buyer.role === "signer")));
   if (groups.some((group) => !group.length)) throw Error("Every launch column needs a buyer");
-  if (input.userFunded && (groups.length > 4 || columns.some((c, i) => c !== i))) throw Error("A launch has one to four consecutive columns");
+  if ((groups.length > 4 || columns.some((c, i) => c !== i))) throw Error("A launch has one to four consecutive columns");
   const last = groups.length - 1;
   const planned = await ctx.trader.compileGroups([
     {
       payer: input.fundingWallet,
-      ...(input.capitalWallet
-        ? { additionalWallets: [input.capitalWallet] }
-        : {}),
       drafts: [draft(creation, [mintSigner])],
       cuLimit: 400_000,
       priorityMicroLamports: 0,
@@ -307,7 +259,7 @@ export async function prepareBundle(
             ]
           : []),
       ],
-      cuLimit: input.userFunded ? 1_200_000 : 300_000,
+      cuLimit: 1_200_000,
       priorityMicroLamports: 0,
     })),
   ]);
@@ -321,10 +273,8 @@ export async function prepareBundle(
     bs58.encode(p.transaction.signatures[0]!),
   );
   return {
-    ...(input.userFunded ? {userFunded:true} : {}),
     kind: "bundle",
     ...(input.feesTo ? { feesTo: input.feesTo } : {}),
-    ...(input.capitalWallet ? { capitalWallet: input.capitalWallet } : {}),
     fundingWallet: input.fundingWallet,
     transactions: transactions.map((b) => Buffer.from(b).toString("base64")),
     signatures,
@@ -388,7 +338,6 @@ export async function refreshBundle(
   plan: BundleIntent,
   fundingWallet: string,
   devBuyLamports: number,
-  ownFunds = false,
 ) {
   if (
     (await ctx.connection.getBlockHeight("finalized")) <=
@@ -413,10 +362,8 @@ export async function refreshBundle(
     mint: plan.mint,
     metadata: plan.metadata,
     devBuyLamports,
-    ...(ownFunds || plan.capitalWallet || plan.userFunded ? { buyers: plan.buyers } : {}),
-    ...(plan.userFunded ? {userFunded:true} : {}),
+    buyers: plan.buyers,
     ...(plan.feesTo ? { feesTo: plan.feesTo } : {}),
-    ...(plan.capitalWallet ? { capitalWallet: plan.capitalWallet } : {}),
   });
   return {
     ...fresh,

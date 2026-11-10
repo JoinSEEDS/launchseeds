@@ -1,10 +1,9 @@
 import "../src/server/rpc-pacing-install";
-import { runForSite, sitePathAllowed, currentBrand, tokenVisible } from "../src/server/site-brand";
+import { runForSite } from "../src/server/site-brand";
 import { getStore } from "../src/server/runtime";
 import { createAppRouter, builtAssets } from "tradjs/server";
 import { localIngress } from "../src/server/local-ingress";
 import { ensureWorker } from "../src/server/worker-supervisor";
-import { siteForHost, siteRedirectTarget } from "../src/server/token-site";
 if (!process.env.LAUNCHSEEDS_DB_PATH)
   throw new Error(
     "Load .config.toml through bgrun before starting the local runtime",
@@ -18,23 +17,6 @@ const server = Bun.serve({
   async fetch(request, server) {
     try {
       const peer = server.requestIP(request)?.address ?? null;
-      // A token's own domain: "/" is its site, API and media stay on this app,
-      // anything else belongs to LaunchSeeds itself.
-      const site = siteForHost(request.headers.get("host"));
-      if (site) {
-        const url = new URL(request.url);
-        if (url.pathname === "/")
-          request = new Request(
-            new URL(`/site/${site.slug}${url.search}`, url),
-            request,
-          );
-        else if (!/^\/(api|media)\//.test(url.pathname)) {
-          const base = process.env.PUBLIC_BASE_URL;
-          return base
-            ? Response.redirect(siteRedirectTarget(url.href, base), 302)
-            : new Response("Not found", { status: 404 });
-        }
-      }
       const trusted = localIngress(request, peer);
       const path = new URL(trusted.url).pathname;
       // Built CSS/JS names carry a content hash, so a changed file gets a new URL.
@@ -53,12 +35,6 @@ const server = Bun.serve({
         });
       }
       const result = await runForSite(trusted, async () => {
-        if (!sitePathAllowed(path)) return new Response("Not found", { status: 404 });
-        const handle = /^\/api\/launches\/([^/]+)$/.exec(path)?.[1];
-        if (currentBrand().kind === "launchseeds" && handle) {
-          const token = getStore().repo.tokens.getByHandle(handle);
-          if (!token || !tokenVisible(token)) return new Response("Not found", { status: 404 });
-        }
         return handler(trusted);
       });
       if (result instanceof Response) {

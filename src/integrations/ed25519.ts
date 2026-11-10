@@ -1,7 +1,10 @@
 import { createPublicKey, verify } from "node:crypto";
 import bs58 from "bs58";
-import type { VoteVerifier } from "./votes";
-export const ed25519VoteVerifier: VoteVerifier = {
+/** Checks that `wallet` signed `message` (base58 signature). */
+export interface SignatureVerifier {
+  verify(input: { wallet: string; signature: string; message: string }): Promise<boolean>;
+}
+export const ed25519VoteVerifier: SignatureVerifier = {
   async verify({ wallet, signature, message }) {
     try {
       const key = bs58.decode(wallet),

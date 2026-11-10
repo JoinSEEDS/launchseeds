@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync, watch } from "node:fs";
 import { dirname, join, resolve, basename } from "node:path";
 const wakePath = () =>
   join(
-    dirname(resolve(process.env.LAUNCHSEEDS_DB_PATH || "./data/launchseeds-v3.sqlite")),
+    dirname(resolve(process.env.LAUNCHSEEDS_DB_PATH || "./data/launchseeds.sqlite")),
     "launch-wake",
   );
 /** Best-effort signal only. Persisted launch rows and short scans recover missed notifications. */

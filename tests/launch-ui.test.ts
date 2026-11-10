@@ -15,7 +15,6 @@ import {
   type PublicLaunchStatus,
 } from "../lib/launch-ui";
 import { DEFAULT_LAUNCH_SETTINGS } from "../src/domain/launch-settings";
-import { DESCRIPTION } from "../lib/strategy";
 
 const fields: LaunchFormFields = {
   name: "  Launchseeds  ",
@@ -25,8 +24,7 @@ const fields: LaunchFormFields = {
   x: "@launchseeds",
   telegram: "@launchseeds",
   image: "https://launchseeds.xyz/example.png",
-  firstStrategy: { type: "burn", amount: 25 },
-  settings: DEFAULT_LAUNCH_SETTINGS,
+  settings: { ...DEFAULT_LAUNCH_SETTINGS, scheduledAt: 1 },
 };
 const baseline: PublicLaunchStatus = {
   handle: "0123456789abcdef0123456789abcdef",
@@ -44,7 +42,7 @@ const baseline: PublicLaunchStatus = {
 describe("launch field preparation", () => {
   test("uses the default description and the coin's own page unless the launcher overrides them", () => {
     const payload = buildLaunchPayload(fields);
-    expect(payload.description).toBe(DESCRIPTION);
+    expect(payload.description).toBe("");
     expect(payload.symbol).toBe("FAIR");
     expect(payload.name).toBe("Launchseeds");
     expect(payload.website).toBe("https://launchseeds.xyz");
@@ -54,11 +52,10 @@ describe("launch field preparation", () => {
       description: "  ",
     });
     expect(defaults.website).toBe("");
-    expect(defaults.description).toBe(DESCRIPTION);
+    expect(defaults.description).toBe("");
     expect(
       buildLaunchPayload({ ...fields, description: " Mine " }).description,
     ).toBe("Mine");
-    expect(payload.firstStrategy).toEqual({ type: "burn", amount: 25 });
     expect(Object.keys(payload).sort()).toEqual(
       [
         "name",
@@ -69,7 +66,6 @@ describe("launch field preparation", () => {
         "x",
         "telegram",
         "devBuySol",
-        "firstStrategy",
         "settings",
       ].sort(),
     );

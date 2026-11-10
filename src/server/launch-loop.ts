@@ -1,9 +1,7 @@
 import { storedLaunchSettings } from "../domain/launch-settings";
 import { createMeasure } from "measure-fn";
-import { hasStrategy } from "../../lib/governance";
 import type { Store } from "./store";
 import type { LaunchService } from "./launch";
-import type { BundleEngine } from "./bundle-engine";
 const { measure } = createMeasure("launchseeds:launch");
 export type LaunchCycleResult = {
   errors: Array<{ tokenId: number; operation: string; error: string }>;
@@ -12,7 +10,7 @@ export type LaunchCycleResult = {
 export async function runLaunchCycle(input: {
   store: Store;
   launch: LaunchService;
-  bundles?: BundleEngine;
+  bundles?: { tick(): Promise<string[]> };
 }): Promise<LaunchCycleResult> {
   return measure("launch cycle", async () => {
     const pending = input.store.repo.tokens
@@ -24,9 +22,7 @@ export async function runLaunchCycle(input: {
       );
     const errors: LaunchCycleResult["errors"] = [];
     if (input.bundles)
-      for (const line of await input.bundles.tick(
-        (id) => input.store.repo.tokens.get(id) ?? null,
-      ))
+      for (const line of await input.bundles.tick())
         if (
           !/holding: not every wallet|waiting for the launch|done$/.test(line)
         )
@@ -63,11 +59,7 @@ export async function runLaunchCycle(input: {
       try {
         await measure(`${token.id} ${token.status}`, async () => {
           if (token.status === "preparing") {
-            if (
-              storedLaunchSettings(token.launchSettingsJson).scheduledAt !==
-                null ||
-              hasStrategy(token.id)
-            )
+            if (storedLaunchSettings(token.launchSettingsJson).scheduledAt !== null)
               await input.launch.resumePreparation(token.id);
           } else await input.launch.process(token.id);
         });

@@ -4,7 +4,7 @@ import type { LaunchSettings } from "../src/domain/launch-settings";
 import { MAX_TOKEN_IMAGE_BYTES, TOKEN_IMAGE_SIZE_ERROR } from "./media-policy";
 import { validTelegram, normalizeX, validX } from "./launch-socials";
 import { TICKER_PATTERN, normalizeTicker } from "./ticker";
-import { DESCRIPTION, type Strategy } from "./strategy";
+
 
 /** Public statuses exposed by the canonical launch service. */
 export type LaunchPhase =
@@ -45,7 +45,6 @@ export interface LaunchFormFields {
   x: string;
   telegram: string;
   image: string;
-  firstStrategy: Strategy | null;
   settings: LaunchSettings;
 }
 
@@ -112,7 +111,7 @@ export function launchView(status: PublicLaunchStatus): LaunchView {
           : phase === "deploying"
             ? "Deposit confirmed. Deployment is in progress."
             : phase === "live"
-              ? "Token deployed. Open the token page to see its treasury."
+              ? "Token deployed. Open its coin page."
               : "Launch status is unavailable.";
   return {
     phase,
@@ -207,8 +206,7 @@ export function validateLaunchFields(fields: LaunchFormFields): string | null {
   if (!validTelegram(fields.telegram)) {
     return "Enter a Telegram handle or t.me link, or leave it blank.";
   }
-  if (!fields.firstStrategy && fields.settings.scheduledAt === null)
-    return "Choose a starting strategy.";
+  if (fields.settings.scheduledAt === null) return "Choose a launch time.";
   return null;
 }
 
@@ -216,13 +214,12 @@ export function buildLaunchPayload(fields: LaunchFormFields) {
   return {
     name: fields.name.trim(),
     symbol: normalizeTicker(fields.symbol.trim()),
-    description: fields.description?.trim() || DESCRIPTION,
+    description: fields.description?.trim() ?? "",
     image: fields.image,
     website: fields.website.trim(),
     x: normalizeX(fields.x),
     telegram: fields.telegram.trim(),
     devBuySol: fields.devBuySol,
-    firstStrategy: fields.firstStrategy,
     settings: fields.settings,
   };
 }

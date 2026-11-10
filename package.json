@@ -1,5 +1,5 @@
 {
-  "name": "launchseeds-tradjs",
+  "name": "launchseeds",
   "version": "0.2.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,6 @@
     "build": "tradjs build",
     "start": "bun run scripts/serve-local.ts",
     "test": "bun test",
-    "check:structure": "node scripts/check-route-contract.cjs",
     "check:admin": "node scripts/check-admin-v12.cjs",
     "check": "bun node_modules/typescript/bin/tsc --noEmit",
     "smoke": "bun test && bun run build"

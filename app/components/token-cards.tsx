@@ -9,15 +9,9 @@ export type TokenCardData = {
   scheduledAt: number | null;
   createdAt: number;
   marketCap: string | null;
-  protection: string | null;
   target: number | null;
   profit: string | null;
   destination: string | null;
-  legacyFunding?: string;
-  legacySurplus?: string;
-  legacyPercent?: number;
-  legacyFees?: string;
-  holderRewards: boolean;
 };
 export function TokenCards({ items }: { items: TokenCardData[] }) {
   return (
@@ -64,8 +58,6 @@ export function TokenCards({ items }: { items: TokenCardData[] }) {
                   <dd>{c.marketCap ?? "Not observed"}</dd>
                 </div>
                 <div>
-                  <dt>Protection</dt>
-                  <dd>{c.protection ? `${c.protection} SOL` : "None"}</dd>
                 </div>
                 <div>
                   <dt>Sell target</dt>
@@ -82,21 +74,6 @@ export function TokenCards({ items }: { items: TokenCardData[] }) {
                 <p className="card-destination">
                   Profits <b>{c.destination}</b>
                 </p>
-              ) : null}
-              {c.legacyFunding || c.holderRewards ? (
-                <details className="legacy-rewards">
-                  <summary>Existing token rewards</summary>
-                  {c.holderRewards ? (
-                    <p>Fees paid in SOL by Pump</p>
-                  ) : (
-                    <>
-                      <p>{c.legacyFunding}</p>
-                      <span>{c.legacyPercent}% funded</span>
-                      {c.legacySurplus ? <p>{c.legacySurplus}</p> : null}
-                      {c.legacyFees ? <p>Creator fees {c.legacyFees}</p> : null}
-                    </>
-                  )}
-                </details>
               ) : null}
               <a className="btn btn--block" href={c.href}>
                 {c.scheduledAt ? "View launch plan" : "View token"}

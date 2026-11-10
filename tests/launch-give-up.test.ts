@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_LAUNCH_SETTINGS, canonicalLaunchSettings } from "../src/domain/launch-settings";
+import { canonicalLaunchSettings } from "../src/domain/launch-settings";
+import { scheduledSettings } from "./fixtures";
 import { LAUNCH_GIVE_UP_MS, LaunchService } from "../src/server/launch";
 
 const at = 1_000_000_000;
 const fake = (scheduledAt: number | null) => {
-  const token: any = { id: 7, status: "deploying", launchSettingsJson: canonicalLaunchSettings({ ...DEFAULT_LAUNCH_SETTINGS, scheduledAt, holderRewards: true, sniperSeconds: null, bundleLamports: 100_000_000, walletSharesBps: [3334, 3333, 3333], profitPolicy: { mode: "token" }, boost: { durationMs: 3_600_000, steps: 6 } } as never) };
+  const token: any = { id: 7, status: "deploying", launchSettingsJson: canonicalLaunchSettings(scheduledSettings(scheduledAt ?? 1)) };
   const runs = [{ id: 1, revision: 3, stateJson: JSON.stringify({ status: "buying" }) }];
   const saved: string[] = [];
   const repo: any = {

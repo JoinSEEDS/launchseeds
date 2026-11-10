@@ -1,7 +1,7 @@
 /** Launch-page only: kept out of lib/wallet-session.ts so @solana/web3.js is
  * not bundled into every page that shows the wallet button. */
 import { Transaction } from "@solana/web3.js";
-import { walletProvider } from "./vote-ui";
+import { walletProvider } from "./wallet-provider";
 
 const browserWindow = (): Window | null =>
   typeof window !== "undefined" ? window : null;

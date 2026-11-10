@@ -2,9 +2,6 @@ import type { SqlDb } from "./util";
 export type CatalogQuery = {
   filter: "all" | "live" | "scheduled";
   q: string;
-  launchseeds: boolean;
-  cutoff: number | null;
-  excludeMint: string;
 };
 export type CatalogBoundary = { at: number; id: number; direction: "after" | "before" };
 
@@ -14,16 +11,9 @@ export function launchCatalogRepo(db: SqlDb) {
     return db.tokens.select().where((c, f, op) => {
       const json = f.iif(f.json_valid(c.launchSettingsJson), c.launchSettingsJson, "{}");
       const scheduledAt = f.json_extract(json, "$.scheduledAt");
-      const policy = f.json_extract(json, "$.profitPolicy.mode");
       const live = op.eq(c.status, "live");
       const scheduled = op.and(op.isNotNull(scheduledAt), op.or(op.eq(c.status,"funding"),op.or(op.eq(c.status,"deploying"),op.eq(c.status,"failed"))));
       let condition = input.filter === "live" ? live : input.filter === "scheduled" ? scheduled : op.or(live,scheduled);
-      if (input.excludeMint) condition = op.and(condition,op.ne(f.coalesce(c.mint,""),input.excludeMint));
-      if (input.launchseeds) {
-        condition = op.and(condition, input.cutoff === null ? op.eq(1,0) : op.gte(f.iif(live,f.coalesce(c.launchedAt,c.createdAt),c.createdAt),input.cutoff));
-        condition = op.and(condition,op.and(op.isNotNull(scheduledAt),op.or(op.eq(policy,"burn"),op.eq(policy,"wallet"))));
-        condition = op.and(condition,op.ne(f.upper(c.symbol),"TOKEN"));
-      }
       if (input.q) {
         // INSTR treats % and _ as literal characters, not wildcard operators.
         const term = input.q.replace(/[A-Z]/g, s=>s.toLowerCase());

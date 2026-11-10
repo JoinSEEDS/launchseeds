@@ -1,9 +1,7 @@
-import { tokenVisible } from "./site-brand";
 import { reservedMint } from "../domain/reserved-mint";
 import { scheduledCommitment } from "../domain/scheduled-plan";
 import type { Store } from "./store";
 import { storedLaunchSettings } from "../domain/launch-settings";
-import { bundleView } from "./bundle-view";
 import type { BundleBuyer } from "./launch-bundle";
 export function publicScheduledPlan(
   store: Store,
@@ -13,7 +11,7 @@ export function publicScheduledPlan(
   if (!/^[a-f0-9]{64}$/.test(planHash)) return null;
   const plan = store.repo.scheduledPlans.byHash(planHash);
   const token = plan && store.repo.tokens.get(plan.tokenId);
-  if (!plan || !token || token.status === "preparing" || !tokenVisible(token)) return null;
+  if (!plan || !token || token.status === "preparing") return null;
   const settings = storedLaunchSettings(token.launchSettingsJson);
   if (settings.scheduledAt === null) return null;
   const funded =
@@ -64,7 +62,6 @@ export function publicScheduledPlan(
     createdAt: token.createdAt,
     launchedAt: token.launchedAt,
     mint: token.status === "live" || settings.publishMint ? reservedMint(token) : null,
-    holderRewards: settings.holderRewards,
     userBatches: settings.userBatches,
     batchRuns: settings.userBatches ? store.repo.userBatches.byToken(token.id).map(row=>{
       const state=JSON.parse(row.stateJson);
@@ -73,7 +70,6 @@ export function publicScheduledPlan(
     feesTo: settings.feesTo,
     launchSignature: token.deploySignature,
     totalLamports: String(settings.bundleLamports),
-    walletSharesBps: settings.walletSharesBps!,
     wallets: (JSON.parse(plan.buyersJson) as BundleBuyer[]).map((b) => ({
       batchIndex: b.batchIndex,
       tranche: b.tranche,
@@ -83,13 +79,10 @@ export function publicScheduledPlan(
       wallet: b.wallet,
       budgetLamports: b.budgetLamports,
     })),
-    boost: settings.boost,
-    exitPercent: settings.bundleExitPercent,
-    profitPolicy: settings.profitPolicy!,
-    bundle: bundleView(store, token.id),
+    proceedsWallet: settings.userBatches?.proceedsWallet ?? null,
     note:
       status === "delayed"
-        ? "Launch time reached. Execution is delayed while capital or chain confirmation is pending."
+        ? "Launch time reached. Execution is delayed while chain confirmation is pending."
         : status === "missed"
           ? "Payment deadline passed without timely confirmation. Do not send funds; late payments require refund review."
           : status === "awaiting_payment"
@@ -121,7 +114,7 @@ export function scheduledLaunches(store: Store) {
 export function publicPlanForMint(store: Store, mint: string) {
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) return null;
   const token = store.data.database.tokens.select().where({mintSignerRef:`launchseeds-mint-${mint}`}).get();
-  if (!token || !tokenVisible(token)) return null;
+  if (!token) return null;
   const plan = store.repo.scheduledPlans.byToken(token.id);
   return plan ? publicScheduledPlan(store,plan.planHash) : null;
 }

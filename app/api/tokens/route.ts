@@ -16,8 +16,7 @@ export function GET(request: Request = new Request("http://localhost/api/tokens"
         image: token.image,
         mint: token.mint,
         priceUsd: token.priceUsd,
-        collectedMicros: token.collectedMicros,
-        spentMicros: token.spentMicros,
+        marketCapUsd: token.marketCapUsd,
       }));
     return apiJson({ tokens, pagination });
   } catch (error) {

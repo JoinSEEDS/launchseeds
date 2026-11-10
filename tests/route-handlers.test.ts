@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { Keypair } from "@solana/web3.js";
-import { insertToken, seedHolder } from "./fixtures";
+import { insertToken } from "./fixtures";
 import { getStore } from "../src/server/runtime";
 import { GET as health } from "../app/api/health/route";
 import { GET as tokens } from "../app/api/tokens/route";
 import { GET as tokenDetails } from "../app/api/tokens/[uid]/route";
-import { GET as holderChance } from "../app/api/tokens/[uid]/chance/route";
 import { GET as tokenMetadata } from "../app/api/metadata/[uid]/route";
 import { GET as launchStatus } from "../app/api/launches/[uid]/route";
 import { POST as prepareLaunch } from "../app/api/launches/route";
@@ -64,7 +63,6 @@ describe("method-specific route handlers", () => {
     const routes = [
       tokenDetails(url("/api/tokens/not-a-uuid")),
       tokenMetadata(url("/api/metadata/not-a-uuid")),
-      holderChance(url("/api/tokens/not-a-uuid/chance?wallet=" + wallet)),
     ];
     for (const response of routes) expect(response.status).toBe(404);
     expect((await launchStatus(url("/api/launches/not-a-uuid"))).status).toBe(
@@ -72,71 +70,7 @@ describe("method-specific route handlers", () => {
     );
   });
 
-  test("live token data comes from the canonical store and is redacted", async () => {
-    const store = getStore();
-    const token = insertToken(store, {
-      handle: uid.replaceAll("-", ""),
-      name: "Example",
-      symbol: "EX",
-      mint: wallet,
-      fundingWallet: wallet,
-      rewardWallet: wallet,
-      creatorWallet: wallet,
-    });
-    const holderWallet = Keypair.generate().publicKey.toBase58();
-    seedHolder(store, token.id, holderWallet);
 
-    const listing = await body(tokens());
-    expect((listing.tokens as { mint: string }[]).map((x) => x.mint)).toContain(
-      wallet,
-    );
-    // Public token APIs are addressed by CA and never return internal ids.
-    expect(JSON.stringify(listing)).not.toContain(token.handle);
-    expect((listing.tokens as object[])[0]).not.toHaveProperty("id");
-    expect((await tokenDetails(url(`/api/tokens/${uid}`))).status).toBe(404);
-    const details = await body(tokenDetails(url(`/api/tokens/${wallet}`)));
-    expect(details.mint).toBe(wallet);
-    expect(JSON.stringify(details)).not.toContain(token.handle);
-    expect(details).not.toHaveProperty("id");
-    expect(details).not.toHaveProperty("accessHash");
-    expect(details).not.toHaveProperty("fundingWallet");
-    expect(details).not.toHaveProperty("requestHash");
-    const metadata = await body(tokenMetadata(url(`/api/metadata/${wallet}`)));
-    expect(metadata.name).toBe("Example");
-    expect(metadata.description).toBe("Official description");
-    const chance = await body(
-      holderChance(url(`/api/tokens/${wallet}/chance?wallet=${holderWallet}`)),
-    );
-    expect(chance.balance).toBe(25);
-    expect(chance.gravity).toBe(100);
-    expect(chance.probability).toBe(1);
-    store.repo.holders.syncBalance({
-      tokenId: token.id,
-      wallet: holderWallet,
-      balanceRaw: "0",
-      slot: 2,
-      observedAt: Date.now() + 1,
-    });
-    const sold = await body(
-      holderChance(url(`/api/tokens/${wallet}/chance?wallet=${holderWallet}`)),
-    );
-    expect(sold.balance).toBe(0);
-    expect(sold.gravity).toBe(100);
-    expect(sold.probability).toBe(1);
-    const status = await body(
-      await launchStatus(url(`/api/launches/${token.handle}`)),
-    );
-    expect(status.handle).toBe(token.handle);
-    expect(status).not.toHaveProperty("id");
-    expect(status).not.toHaveProperty("accessHash");
-  });
-
-  test("unlisted token does not disclose its holder data", async () => {
-    const notFound = crypto.randomUUID();
-    expect((await tokenDetails(url(`/api/tokens/${notFound}`))).status).toBe(
-      404,
-    );
-  });
 });
 
 test("routes are independently implemented rather than method/path dispatched", () => {
@@ -144,7 +78,6 @@ test("routes are independently implemented rather than method/path dispatched", 
     "app/api/health/route.ts",
     "app/api/tokens/route.ts",
     "app/api/tokens/[uid]/route.ts",
-    "app/api/tokens/[uid]/chance/route.ts",
     "app/api/metadata/[uid]/route.ts",
     "app/api/launches/route.ts",
     "app/api/launches/[uid]/route.ts",

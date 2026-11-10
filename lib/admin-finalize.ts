@@ -5,7 +5,7 @@ import bs58 from "bs58";
 import { finalizeMessage } from "./bundle-message";
 import { postJson } from "./client-request";
 import { connectWallet, subscribeWallet, walletAddress } from "./wallet-session";
-import { walletProvider } from "./vote-ui";
+import { walletProvider } from "./wallet-provider";
 
 export function mountAdminFinalize(): () => void {
   const panel = document.getElementById("admin-finalize");

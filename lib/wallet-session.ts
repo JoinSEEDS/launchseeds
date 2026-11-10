@@ -1,4 +1,4 @@
-import { walletProvider, type WalletProvider } from "./vote-ui";
+import { walletProvider, type WalletProvider } from "./wallet-provider";
 import { WALLET_ADDRESS } from "./wallet-lookup";
 
 /**
