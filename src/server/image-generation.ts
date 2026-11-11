@@ -41,10 +41,10 @@ export const FAL_TEXT_MODEL = "fal-ai/nano-banana";
 export function imagePrompt(name: string, symbol: string): string {
   return (
     `Token icon for a crypto token named "${name}"${symbol ? ` (ticker ${symbol})` : ""}. ` +
-    "Match the attached reference image's style exactly: one glossy, bold, rounded 3D " +
-    "emblem centered inside a thick round ring badge, on a solid black background, with " +
-    "smooth gradients and soft highlights. Replace the subject with one that fits the name, " +
-    "and choose colors that suit it. Square, no text, letters or numbers."
+    "Match the attached reference image's style: one friendly, bold cartoon mascot with " +
+    "thick dark outlines and flat, vivid colors, sticker-like, centered on a solid black " +
+    "background. Replace the subject with one that fits the name, and choose colors that " +
+    "suit it. Square, no text, letters or numbers."
   );
 }
 
