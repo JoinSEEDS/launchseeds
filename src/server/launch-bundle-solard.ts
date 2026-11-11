@@ -180,7 +180,8 @@ export async function prepareBundle(
   const buyers = input.buyers;
   const mintSigner = ctx.trader.signer(input.mint);
   // Paired launches: created quoted in the pair coin, each wallet buys SOL -> pair -> coin.
-  const pairedMint = input.pairMint ?? null;
+  // The pair coin itself launches paired with SOL: it is the base the others pair with.
+  const pairedMint = input.pairMint && input.pairMint !== input.mint ? input.pairMint : null;
   if (pairedMint) {
     if (!feesTo) throw new Error("A paired launch needs a fee recipient");
     const pair = await resolvePair(pump, ctx.connection, pairedMint);
@@ -302,7 +303,7 @@ async function compileBundle(
   return {
     kind: "bundle",
     ...(input.feesTo ? { feesTo: input.feesTo } : {}),
-    ...(input.pairMint ? { pairMint: input.pairMint } : {}),
+    ...(input.pairMint && input.pairMint !== input.mint ? { pairMint: input.pairMint } : {}),
     fundingWallet: input.fundingWallet,
     transactions: transactions.map((b) => Buffer.from(b).toString("base64")),
     signatures,
