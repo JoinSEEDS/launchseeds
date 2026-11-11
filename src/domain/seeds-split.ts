@@ -11,8 +11,10 @@ export function seedsShareBps(env: Record<string, string | undefined> = process.
   if (!Number.isInteger(n) || n < 0 || n > 5000) throw new Error("LAUNCHSEEDS_SEEDS_SHARE_BPS must be 0–5000");
   return n;
 }
-/** The $SEEDS mint, once it is launched and set in config. */
-export const seedsMint = (env: Record<string, string | undefined> = process.env) => env.LAUNCHSEEDS_SEEDS_MINT?.trim() || null;
+/** The vanity mint set aside for $SEEDS before launch (scripts/reserve-seeds-mint.ts). */
+export const seedsReservedMint = (env: Record<string, string | undefined> = process.env) => env.LAUNCHSEEDS_SEEDS_RESERVED_MINT?.trim() || null;
+/** The $SEEDS mint: set in config, or the one reserved for its launch. */
+export const seedsMint = (env: Record<string, string | undefined> = process.env) => env.LAUNCHSEEDS_SEEDS_MINT?.trim() || seedsReservedMint(env);
 /** Tickers only an admin may launch. */
 export const isSeedsSymbol = (symbol: string) => symbol.trim().replace(/^\$/, "").toUpperCase() === SEEDS_SYMBOL;
 /** The $SEEDS cut of one coin's fees; the coin keeps the rest for its challenges. */

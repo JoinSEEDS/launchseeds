@@ -1,3 +1,4 @@
+import { isSeedsSymbol, seedsReservedMint } from "../domain/seeds-split";
 import { allocateTranches, allocateUserBatches, batchWalletCount, trancheFunding, userBatchFunding } from "../domain/user-funded-batches";
 import { BUYER_RESERVE_LAMPORTS, JITO_TIP_LAMPORTS } from "./launch-bundle";
 import { scheduledCommitment } from "../domain/scheduled-plan";
@@ -162,7 +163,9 @@ export class LaunchService {
       const busy = () => new ApiError("Another coin is launching. Try again in a few minutes.", 409);
       if (treasuryBusy(this.store.repo)) throw busy();
       // A lost race leaves only an unused, unfunded mint key behind.
-      const mint = this.provider.createMint();
+      // $SEEDS launches on the mint reserved for it, so its CA was known in advance.
+      const reserved = isSeedsSymbol(input.symbol) ? seedsReservedMint() : null;
+      const mint = reserved ? { mint: reserved, mintSignerRef: `launchseeds-mint-${reserved}` } : this.provider.createMint();
       tokenId = this.store.repo.tx((tx) => {
         const raced = tx.tokens.getByAccess(accessHash);
         if (raced) {
@@ -171,6 +174,8 @@ export class LaunchService {
           return raced.id;
         }
         if (treasuryBusy(tx)) throw busy();
+        if (reserved && tx.tokens.all().some((t) => t.mintSignerRef === mint.mintSignerRef && t.status !== "failed"))
+          throw new ApiError("$SEEDS is already launching or live.", 400);
         return tx.tokens.insert({
           handle: launchHandle(mint.mint),
           mint: null,

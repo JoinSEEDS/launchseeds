@@ -72,5 +72,7 @@ const sol = (value: string | undefined) => {
 };
 /** LAUNCHSEEDS_MAX_BUNDLE_SOL: the most one launch's bundle buys. 0 when unset: no launches. */
 export const maxBundleLamports = (env: NodeJS.ProcessEnv = process.env) => sol(env.LAUNCHSEEDS_MAX_BUNDLE_SOL);
+/** LAUNCHSEEDS_SEEDS_BUNDLE_SOL: the $SEEDS launch's bundle; unset: the same cap as every launch. */
+export const seedsBundleLamports = (env: NodeJS.ProcessEnv = process.env) => sol(env.LAUNCHSEEDS_SEEDS_BUNDLE_SOL);
 /** LAUNCHSEEDS_DAILY_LOSS_SOL: launches pause once the last 24 hours lost this much. 0 when unset: no limit. */
 export const dailyLossLimit = (env: NodeJS.ProcessEnv = process.env) => sol(env.LAUNCHSEEDS_DAILY_LOSS_SOL);

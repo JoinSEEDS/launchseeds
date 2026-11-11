@@ -9,6 +9,7 @@ import { scheduledPlansRepo } from "./scheduled-plans";
 import { tokenRepo } from "./tokens";
 import { depositRepo } from "./deposits";
 import { challengesRepo } from "./challenges";
+import { launchQueueRepo } from "./launch-queue";
 
 export function createRepo(db: LaunchseedsDatabase) {
   const r = {
@@ -18,6 +19,7 @@ export function createRepo(db: LaunchseedsDatabase) {
     tokens: tokenRepo(db),
     deposits: depositRepo(db),
     challenges: challengesRepo(db),
+    launchQueue: launchQueueRepo(db),
   };
 
   return {

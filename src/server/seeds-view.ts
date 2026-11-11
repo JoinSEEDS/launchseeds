@@ -37,9 +37,9 @@ export type SeedsView = ReturnType<typeof seedsView>;
 
 type Verify = (input: { wallet: string; signature: string; message: string }) => Promise<boolean>;
 /** An admin authorizes spending part of the $SEEDS pool; the worker runs it. */
-export async function requestSeedsBurn(repo: Pick<LaunchseedsRepo, "challenges">, verify: Verify, admins: string[], r: SeedsBurnRequest, signature: string, now = Date.now()) {
+export async function requestSeedsBurn(repo: Pick<LaunchseedsRepo, "challenges" | "tokens">, verify: Verify, admins: string[], r: SeedsBurnRequest, signature: string, now = Date.now()) {
   const mint = seedsMint();
-  if (!mint) throw new ApiError("$SEEDS is not launched yet.", 409);
+  if (!mint || repo.tokens.getByMint(mint)?.status !== "live") throw new ApiError("$SEEDS is not launched yet.", 409);
   if (!admins.includes(r.wallet)) throw new ApiError("Only an admin wallet can do that.", 403);
   if (r.mint !== mint) throw new ApiError("Signed for another coin.", 400);
   if (!/^[a-f0-9]{32}$/.test(r.nonce) || !Number.isSafeInteger(r.issuedAt) || Math.abs(now - r.issuedAt) > 5 * 60_000) throw new ApiError("Sign a fresh request.", 400);

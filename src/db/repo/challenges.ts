@@ -43,6 +43,10 @@ export function challengesRepo(db: SqlDb, split: SeedsSplit = envSplit) {
     challenge(id: number) {
       return db.challenges.select().where({ id }).get() ?? null;
     },
+    /** Every open challenge on every coin, newest first. */
+    openChallenges() {
+      return db.challenges.select().where({ status: "open" }).orderBy("id", "desc").all();
+    },
     challengesByToken(tokenId: number) {
       return db.challenges.select().where({ tokenId }).orderBy("id", "desc").all();
     },

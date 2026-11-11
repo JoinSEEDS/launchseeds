@@ -20,7 +20,7 @@ export default function DocsPage() {
         <div className="docs-hero container">
           <span className="eyebrow">Documentation</span>
           <h1>How LaunchSeeds turns trading into <em>real-world action</em></h1>
-          <p>Launching a token free, funding its challenges from trading fees, and paying the people who complete them.</p>
+          <p>Launching a token, funding its challenges from trading fees, and paying the people who complete them.</p>
         </div>
       </header>
       <div className="docs-layout container">
@@ -41,7 +41,7 @@ export default function DocsPage() {
             <span className="eyebrow">How it works</span>
             <h2 id="how-h">Three parts, one loop</h2>
             <div className="step-cards">
-              <div><span className="num-badge n1" aria-hidden="true">1</span><b>Launch free</b><span>The treasury buys your token at launch and sells right after.</span></div>
+              <div><span className="num-badge n1" aria-hidden="true">1</span><b>Launch</b><span>The treasury buys your token at launch and sells right after.</span></div>
               <div><span className="num-badge n2" aria-hidden="true">2</span><b>Post challenges</b><span>Say what counts as done, the reward range and how many winners.</span></div>
               <div><span className="num-badge n3" aria-hidden="true">3</span><b>Pay who does it</b><span>The token’s fees pay each completion you approve.</span></div>
             </div>
@@ -51,7 +51,7 @@ export default function DocsPage() {
           <section id="launch" className="doc-sec" aria-labelledby="launch-h">
             <span className="eyebrow">For creators</span>
             <h2 id="launch-h">Launching a token</h2>
-            <p>Give the token a name, ticker, image and description, and sign with your wallet. Launching is free.</p>
+            <p>Give the token a name, ticker, image and description, and sign with your wallet. The treasury pays for the launch.</p>
             <ul>
               <li><b>Launch time</b>: about two minutes after you sign.</li>
               <li><b>Launch buy</b>: the treasury buys in four wallets, up to 3 SOL in all.</li>

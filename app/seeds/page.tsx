@@ -25,7 +25,7 @@ export default function SeedsPage() {
                 {mint ? <><span aria-hidden="true">·</span><span className="mono">{mint}</span><button className="btn btn-white btn-xs" type="button" data-copy={mint}>Copy</button></> : null}
               </div>
             </div>
-            {mint ? (
+            {mint && live ? (
               <div className="ext-links">
                 <a className="btn btn-white" href={dex} target="_blank" rel="noopener noreferrer">DexScreener {ext}</a>
                 <a className="btn btn-primary" href={`https://pump.fun/coin/${mint}`} target="_blank" rel="noopener noreferrer">Trade</a>
@@ -45,7 +45,7 @@ export default function SeedsPage() {
         </section>
         <div className="cols">
           <div className="col-main">
-            {mint ? (
+            {mint && live ? (
               <section className="card panel" aria-labelledby="chart-h">
                 <div className="panel-head"><div><h2 id="chart-h">Price chart</h2><p>Live from DexScreener</p></div></div>
                 <div className="chart-frame"><iframe src={`${dex}?embed=1&theme=light&trades=0&info=0`} title="$SEEDS price chart" loading="lazy" /></div>

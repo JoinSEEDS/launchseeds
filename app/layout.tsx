@@ -1,6 +1,8 @@
 import { SITE_NAME } from "../lib/site-brand";
+import { seedsMint } from "../src/domain/seeds-split";
 
 export default function RootLayout({ children }: { children: any }) {
+  const seeds = seedsMint();
   return (
     <html lang="en">
       <head>
@@ -27,7 +29,8 @@ export default function RootLayout({ children }: { children: any }) {
         <footer className="footer">
           <div className="container">
             <div className="footer-brand"><img src="/logo.png" alt="" width="32" height="32" /><div><b>{SITE_NAME}</b>A launchpad where trading rewards real-world action.</div></div>
-            <div className="footer-links"><a href="/#launches">Challenges</a><a href="/seeds">$SEEDS</a><a href="/docs">Docs</a></div>
+            {seeds ? <div className="footer-ca"><a href="/seeds">$SEEDS</a><span className="mono">{seeds}</span><button className="btn btn-white btn-xs" type="button" data-copy={seeds}>Copy</button></div> : null}
+            <div className="footer-links"><a href="/challenges">Challenges</a><a href="/seeds">$SEEDS</a><a href="/docs">Docs</a></div>
           </div>
         </footer>
       </body>

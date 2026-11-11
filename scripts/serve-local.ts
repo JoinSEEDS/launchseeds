@@ -4,6 +4,8 @@ import { getStore } from "../src/server/runtime";
 import { createAppRouter, builtAssets } from "tradjs/server";
 import { localIngress } from "../src/server/local-ingress";
 import { ensureWorker } from "../src/server/worker-supervisor";
+import { startLaunchQueue } from "../src/server/launch-queue";
+import { getLaunchProvider, getLaunchService } from "../src/server/runtime";
 if (!process.env.LAUNCHSEEDS_DB_PATH)
   throw new Error(
     "Load .config.toml through bgrun before starting the local runtime",
@@ -53,6 +55,8 @@ const server = Bun.serve({
   },
 });
 console.log(`LaunchSeeds local runtime: http://localhost:${server.port}`);
+// Queued free launches start here, one after another, as the treasury frees up.
+startLaunchQueue(async () => ({ store: getStore(), service: await getLaunchService(), provider: await getLaunchProvider() }));
 ensureWorker().then(
   (worker) =>
     worker &&

@@ -110,6 +110,20 @@ export const runtimeSchemas = {
     updatedAt: Time,
     doneAt: Time.nullable().default(null),
   }),
+  /** Signed free-launch requests, launched one after another as the treasury frees up. */
+  launchQueue: z.object({
+    /** Public id the launcher polls with. */
+    key: z.string().length(32),
+    /** sha256 of the request's signature: the launch's own key. */
+    capability: z.string().length(64),
+    wallet: Address,
+    inputJson: z.string(),
+    status: z.enum(["waiting", "started", "failed"]),
+    tokenId: RowId.nullable().default(null),
+    error: z.string().nullable().default(null),
+    createdAt: Time,
+    startedAt: Time.nullable().default(null),
+  }),
   /** Every signed challenge action, by sha256 of its signature, so none runs twice. */
   signedActions: z.object({
     key: z.string().length(64),

@@ -1,16 +1,18 @@
 import { SiteNav } from "../components/site-nav";
+import { launchPromo } from "../../src/server/promo";
 
 /** A free launch: the creator signs in with a wallet and describes the coin. The
  * treasury buys it in the launch bundle and sells right after. */
 export default function LaunchPage() {
+  const promo = launchPromo();
   return (
     <>
       <header className="sky-short">
         <SiteNav current="launch" />
         <div className="docs-hero container">
-          <span className="eyebrow">Free launch</span>
+          {promo ? <div className="hero-tag promo"><svg className="icon" style={{ width: "14px", height: "14px" }}><use href="#i-leaf" /></svg>{promo}</div> : null}
           <h1>Launch a <em>token</em></h1>
-          <p>Free. One launch per wallet a day.</p>
+          <p>One launch per wallet a day.</p>
         </div>
       </header>
       <main className="container launch-main" data-seed-launch="">

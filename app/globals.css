@@ -417,3 +417,7 @@ p { margin: 0; }
 #admin-finalize .btn--danger { background: var(--red-ink); color: #fff; }
 #admin-finalize .btn--sm:not(.btn--danger) { background: #fff; border: 1px solid var(--field); color: var(--ink); }
 [hidden] { display: none !important; }
+.footer-ca { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; font-size: 13px; color: var(--muted); }
+.footer-ca a { font-weight: 700; color: var(--green-text); }
+.footer-ca .mono { overflow-wrap: anywhere; }
+.docs-hero .hero-tag.promo { margin-bottom: 14px; }

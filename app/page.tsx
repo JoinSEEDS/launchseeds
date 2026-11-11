@@ -17,12 +17,12 @@ export function renderHomePage(store: ReturnType<typeof getStore>, input?: Catal
         <div className="sky">
           <SiteNav current="home" />
           <div className="hero">
-            <div className="hero-tag"><svg className="icon" style={{ width: "14px", height: "14px" }}><use href="#i-leaf" /></svg>Free launches with challenges</div>
+            <div className="hero-tag"><svg className="icon" style={{ width: "14px", height: "14px" }}><use href="#i-leaf" /></svg>Launch tokens with challenges</div>
             <h1>Trading that rewards<br /><em>real-world action.</em></h1>
-            <p className="hero-sub">Launch a coin free. Its trading fees pay the people who complete its challenges.</p>
+            <p className="hero-sub">Launch a coin. Its trading fees pay the people who complete its challenges.</p>
             <div className="hero-ctas">
               <a className="btn btn-primary btn-lg" href="/launch">Launch a token <svg><use href="#i-arrow" /></svg></a>
-              <a className="btn btn-white btn-lg" href="#launches" style={{ fontWeight: 600 }}>Find a challenge</a>
+              <a className="btn btn-white btn-lg" href="/challenges" style={{ fontWeight: 600 }}>Find a challenge</a>
             </div>
             <p className="hero-stats"><b>{overview.live}</b> live tokens · <b>{overview.scheduled}</b> launching</p>
           </div>
@@ -40,7 +40,7 @@ export function renderHomePage(store: ReturnType<typeof getStore>, input?: Catal
               <a className="btn btn-outline" href="/docs">Read the docs</a>
             </div>
             <ol className="steps">
-              <li><span className="num-badge n1" aria-hidden="true">1</span><h3>Launch free</h3><p>Name your coin and sign with your wallet. The treasury buys it at launch and sells right after.</p></li>
+              <li><span className="num-badge n1" aria-hidden="true">1</span><h3>Launch</h3><p>Name your coin and sign with your wallet. The treasury buys it at launch and sells right after.</p></li>
               <li><span className="num-badge n2" aria-hidden="true">2</span><h3>Post challenges</h3><p>Say what counts as done, the pay range and how many winners.</p></li>
               <li><span className="num-badge n3" aria-hidden="true">3</span><h3>Pay who does it</h3><p>The coin’s trading fees pay each completion you approve, on-chain.</p></li>
             </ol>
