@@ -28,6 +28,10 @@ type Plugin = {
   buildSell(context:unknown,market:Market,quote:Quote):Promise<{instructions:TransactionInstruction[];minOutputRaw?:bigint}>;
 };
 const FEE_CAP = 100_000n;
+/** Most a pool signer's ledger may exceed its balance by: fees of failed, retried sales. */
+const LEDGER_FEE_SLACK = 5_000_000n;
+/** A system account's rent-exempt minimum: less than this can't be left behind. */
+const RENT_EXEMPT_MIN = 890_880n;
 
 /** Native-SOL Pump and PumpSwap batch execution using Solard's venue builders. */
 export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,loadToken:(mint:string)=>Promise<unknown>,solUsd:()=>Promise<number>):UserBatchChain&{liquidation:CoinLiquidationChain} {
@@ -252,8 +256,13 @@ export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,load
       }
       const make=(fee:bigint)=>[...instructions,...state.buyers.map(buyer=>{
         // A reused pool signer sends only this launch's own net flows.
-        const owned=reused&&buyer.wallet===payer?ledger!+keptRent:balances.get(buyer.wallet)!;
-        if(owned>balances.get(buyer.wallet)!)throw Error("Signer holds less than this launch's recorded flows; payout requires review");
+        const balance=balances.get(buyer.wallet)!;
+        let owned=reused&&buyer.wallet===payer?ledger!+keptRent:balance;
+        // The ledger misses fees of sales that failed on chain and were retried:
+        // a shortfall that small is those fees, so pay out what the wallet holds.
+        if(owned>balance){if(owned-balance>LEDGER_FEE_SLACK)throw Error("Signer holds less than this launch's recorded flows; payout requires review");owned=balance;}
+        // Dust below rent-exemption can't stay behind in the wallet: send it too.
+        if(balance-owned>0n&&balance-owned<RENT_EXEMPT_MIN)owned=balance;
         const available=owned-(buyer.wallet===payer?fee:0n);
         if(available<0n)throw Error("Batch payout cannot cover network fee");
         return SystemProgram.transfer({fromPubkey:new PublicKey(buyer.wallet),toPubkey:destination,lamports:available});
