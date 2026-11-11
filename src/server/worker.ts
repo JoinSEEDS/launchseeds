@@ -19,6 +19,8 @@ export async function runCycle(input: {
   payouts?: { tick(): Promise<string[]> };
   /** Runs an admin-authorized $SEEDS buyback and burn. */
   seedsBurn?: { tick(): Promise<string[]> };
+  /** Saves each live coin's market cap from its curve. */
+  marketCaps?: { refresh(): Promise<number> };
 }) {
   return measure("worker cycle", async () => {
     const errors: { tokenId: number; operation: string; error: string }[] = [];
@@ -51,6 +53,7 @@ export async function runCycle(input: {
       await attempt(0, "challenge payouts", async () => {
         for (const line of await input.payouts!.tick()) console.log(`Challenges: ${line}`);
       });
+    if (input.marketCaps) await attempt(0, "market caps", () => input.marketCaps!.refresh());
     if (input.seedsBurn)
       await attempt(0, "seeds burn", async () => {
         for (const line of await input.seedsBurn!.tick()) console.log(`$SEEDS: ${line}`);

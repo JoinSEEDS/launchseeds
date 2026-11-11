@@ -22,6 +22,8 @@ import { tickPayouts } from "../src/server/challenge-payouts";
 import { TREASURY_WALLET, treasuryBusy } from "../src/server/treasury";
 import { tickSeedsBurn } from "../src/server/seeds-burn";
 import { seedsBurnChain } from "../src/server/seeds-burn-chain";
+import { refreshMarketCaps } from "../src/server/market-caps";
+import { solUsd } from "../src/server/solard";
 if (process.env.LAUNCHSEEDS_WORKER_ENABLED !== "true")
   throw new Error(
     "Workers are disabled. Configure and explicitly enable LAUNCHSEEDS_WORKER_ENABLED before running.",
@@ -181,6 +183,7 @@ try {
           }),
         };
       })() : undefined,
+      marketCaps: launchProvider ? { refresh: () => refreshMarketCaps(store, launchProvider!.connection, solUsd) } : undefined,
       seedsBurn: launchProvider ? {
         tick: async () => {
           if (!store.repo.challenges.activeSeedsBurn()) return [];

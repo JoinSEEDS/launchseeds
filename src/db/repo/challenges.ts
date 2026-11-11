@@ -4,6 +4,8 @@ import { seedsCut, seedsMint, seedsShareBps } from "../../domain/seeds-split";
 const sum = (values: string[]) => values.reduce((total, v) => total + BigInt(v), 0n);
 const IN_FLIGHT = ["approved", "paying"] as const;
 const BURN_ACTIVE = ["queued", "buying", "bought", "burning", "review"] as const;
+/** Each bundle wallet's fee and rent reserve, sent with its budget (launch-bundle.ts). */
+const BUNDLE_WALLET_RESERVE = 14_000_000n;
 export type SeedsSplit = { bps: () => number; mint: () => string | null };
 const envSplit: SeedsSplit = { bps: () => seedsShareBps(), mint: () => seedsMint() };
 
@@ -36,9 +38,25 @@ export function challengesRepo(db: SqlDb, split: SeedsSplit = envSplit) {
     },
     /** What a coin keeps for its challenges: its fees less the $SEEDS share.
      * $SEEDS itself keeps nothing for challenges; all of its fees are its pool. */
+    /** A coin's launch bundle profit: what its paid-out columns returned to the
+     * treasury beyond what the treasury sent them (buy budget and reserve). A loss counts as none. */
+    bundleProfit(tokenId: number) {
+      let net = 0n, settled = 0;
+      for (const row of db.userBatchRuns.select().where({ tokenId }).all()) {
+        const s = JSON.parse(row.stateJson) as { status: string; paidLamports?: string | null; buyers?: { budgetLamports: string }[] };
+        if (s.status !== "settled" || !s.paidLamports) continue;
+        settled++;
+        const sent = (s.buyers ?? []).reduce((n, b) => n + BigInt(b.budgetLamports) + BUNDLE_WALLET_RESERVE, 0n);
+        net += BigInt(s.paidLamports) - sent;
+      }
+      return settled && net > 0n ? net : 0n;
+    },
+    /** What a coin has for its challenges: its fees less the $SEEDS share, plus its
+     * bundle profit. $SEEDS itself keeps nothing for challenges. */
     earned(tokenId: number) {
+      if (tokenId === seedsTokenId()) return 0n;
       const raw = repo.rawFees(tokenId);
-      return tokenId === seedsTokenId() ? 0n : raw - seedsCut(raw, split.bps());
+      return raw - seedsCut(raw, split.bps()) + repo.bundleProfit(tokenId);
     },
     challenge(id: number) {
       return db.challenges.select().where({ id }).get() ?? null;
@@ -138,7 +156,10 @@ export function challengesRepo(db: SqlDb, split: SeedsSplit = envSplit) {
       const claimed = sum(db.feeClaims.select().where({ status: "confirmed" }).all().map((c) => c.lamports));
       const paid = sum(db.submissions.select().where({ status: "paid" }).all().map((s) => s.awardedLamports ?? "0"));
       const burned = sum(db.seedsBurns.select().where({ status: "done" }).all().map((b) => b.spentLamports ?? b.lamports));
-      const held = (claimed < earned ? claimed : earned) - paid - burned;
+      // Bundle profits are already in the treasury: they are owed to their coins too.
+      const seedsId = seedsTokenId();
+      const profits = db.tokens.select().where({ status: "live" }).all().reduce((n, t) => n + (t.id === seedsId ? 0n : repo.bundleProfit(t.id)), 0n);
+      const held = (claimed < earned ? claimed : earned) + profits - paid - burned;
       return held > 0n ? held : 0n;
     },
     /** The $SEEDS pool: its share of every coin's fees plus all of its own,

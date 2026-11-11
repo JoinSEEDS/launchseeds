@@ -294,6 +294,9 @@ export function mountChallenges(): () => void {
     set("waiting", String(all.filter((s) => s.status === "pending").length));
     const treasury = document.querySelector("[data-treasury-wallet]");
     if (treasury && view.treasury) treasury.replaceChildren(link(`https://solscan.io/account/${view.treasury}`, short(view.treasury)));
+    // Admin-only cards, such as the launch plan.
+    const isAdmin = !!wallet && view.admins.includes(wallet);
+    document.querySelectorAll<HTMLElement>("[data-admin-only]").forEach((n) => { n.hidden = !isAdmin; });
     const hint = document.querySelector("[data-role-hint]");
     if (hint) hint.textContent = creator ? "You created this coin. Post challenges and approve submissions to pay them from its fees." : "Complete a challenge and submit proof to be paid from this coin’s trading fees.";
 

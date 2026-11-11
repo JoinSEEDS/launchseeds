@@ -94,3 +94,17 @@ test("fee tracking stops instead of skipping history it could not read", async (
     store.close();
   }
 });
+
+test("a coin's bundle profit counts toward its challenge money; a loss counts as none", () => {
+  const store = new Store(openLaunchseedsData(":memory:"));
+  try {
+    const token = insertToken(store, { status: "live", mint: Keypair.generate().publicKey.toBase58() } as never), c = store.repo.challenges;
+    const column = (budget: string, paid: string) => store.repo.userBatches.insert(token.id, 0, JSON.stringify({ status: "settled", paidLamports: paid, buyers: [{ budgetLamports: budget }] }), 1);
+    column("250000000", "440000000"); // sent 0.264 with the reserve, got 0.44 back
+    expect(c.bundleProfit(token.id)).toBe(176_000_000n);
+    expect(c.earned(token.id)).toBe(176_000_000n);
+    const loser = insertToken(store, { status: "live", mint: Keypair.generate().publicKey.toBase58() } as never);
+    store.repo.userBatches.insert(loser.id, 0, JSON.stringify({ status: "settled", paidLamports: "200000000", buyers: [{ budgetLamports: "250000000" }] }), 1);
+    expect(c.bundleProfit(loser.id)).toBe(0n);
+  } finally { store.close(); }
+});

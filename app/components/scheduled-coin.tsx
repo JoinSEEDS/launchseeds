@@ -46,7 +46,7 @@ export function ScheduledCoin({ plan, marketCapUsd }: { plan: ScheduledLaunchVie
         <main className="token-layout container" id="challenges-root" data-mint={plan.mint!}>
           <section className="stats" aria-label="Coin and treasury numbers">
             <div className="stat"><span className="k">Market cap</span><span className="v">{marketCapUsd ? `$${Math.round(marketCapUsd).toLocaleString("en")}` : "Not observed"}</span><span className="s">{marketCapUsd ? "Last seen" : "No trades yet"}</span></div>
-            <div className="stat"><span className="k">Fees for challenges</span><span className="v"><span data-stat="earned">0.00</span> SOL</span><span className="s">{100 - seedsShareBps() / 100}% of trading fees</span></div>
+            <div className="stat"><span className="k">For challenges</span><span className="v"><span data-stat="earned">0.00</span> SOL</span><span className="s">{100 - seedsShareBps() / 100}% of fees, plus launch profit</span></div>
             <div className="stat green"><span className="k">Treasury balance</span><span className="v"><span data-stat="available">0.00</span> SOL</span><span className="s">Free for new rewards</span></div>
             <div className="stat lav"><span className="k">Paid to participants</span><span className="v"><span data-stat="paid">0.00</span> SOL</span><span className="s" data-stat="paidsub">0 tasks</span></div>
             <div className="stat"><span className="k">Waiting for review</span><span className="v" data-stat="waiting">0</span><span className="s">Submitted tasks</span></div>
@@ -75,7 +75,8 @@ export function ScheduledCoin({ plan, marketCapUsd }: { plan: ScheduledLaunchVie
                   <li><span className="n" style={{ background: "var(--green)", color: "#fff" }}>3</span><div><b>Rewards</b><small>The creator approves a task and it’s paid on-chain</small></div></li>
                 </ol>
               </section>
-              <section className="card side-card" aria-labelledby="plan-h">
+              {/* Shown to admin wallets only (lib/challenges-mount). */}
+              <section className="card side-card" aria-labelledby="plan-h" data-admin-only hidden>
                 <h2 id="plan-h">Launch plan</h2>
                 <div id="scheduled-plan-root"><ScheduledPlan plan={plan} /></div>
               </section>
