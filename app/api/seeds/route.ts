@@ -9,7 +9,9 @@ import { getOperationalLaunchReadiness } from "../../../src/server/launch-health
 import { notifyLaunchWorker } from "../../../src/server/launch-wake";
 import { publicRouteError } from "../../../src/server/route-errors";
 import { parseLaunchSettings } from "../../../src/domain/launch-settings";
-import { dailyLoss, dailyLossLimit, maxBundleLamports, seedBuys, seedLimit, TREASURY_WALLET, treasuryBusy } from "../../../src/server/treasury";
+import { dailyLoss, dailyLossLimit, maxBundleLamports, seedBuys, seedLimit, TREASURY_WALLET, treasuryBusy, treasuryOwed } from "../../../src/server/treasury";
+import { creatorVault } from "../../../src/server/coin-fees";
+import { unclaimed } from "../../../src/server/fee-claims";
 
 const limiter = new IngressRateLimiter("seed-launch", 5, 10 * 60_000);
 const MAX_AGE_MS = 5 * 60_000;
@@ -68,7 +70,9 @@ export async function POST(request: Request): Promise<Response> {
     let settings;
     if (existing) settings = JSON.parse(existing.launchSettingsJson ?? "{}");
     else {
-      const buys = seedBuys(BigInt(await provider.balanceLamports(treasury)), BigInt(solToLamports(process.env.LAUNCH_BASE_SOL || "0")), maxBundle);
+      // Coins' unpaid challenge money stays in the treasury.
+      const owed = treasuryOwed(store.repo.challenges.owedAll(), unclaimed(BigInt(await provider.balanceLamports(creatorVault(treasury)))));
+      const buys = seedBuys(BigInt(await provider.balanceLamports(treasury)), BigInt(solToLamports(process.env.LAUNCH_BASE_SOL || "0")), maxBundle, owed);
       if (!buys) throw new ApiError("The treasury is refilling after the last launch. Try again soon.", 503);
       settings = {
         publishMint: true,

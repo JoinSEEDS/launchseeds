@@ -18,4 +18,11 @@ export const INDEXES = [
   "CREATE UNIQUE INDEX IF NOT EXISTS deposits_signature ON deposits(signature)",
   "CREATE INDEX IF NOT EXISTS deposits_token ON deposits(tokenId)",
   "CREATE UNIQUE INDEX IF NOT EXISTS scheduledPlans_token ON scheduledPlans(tokenId)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS coin_fees_signature ON coinFees(tokenId, signature)",
+  "CREATE INDEX IF NOT EXISTS coin_fees_token_at ON coinFees(tokenId, at DESC)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS fee_claims_id ON feeClaims(claimId)",
+  "CREATE INDEX IF NOT EXISTS challenges_token ON challenges(tokenId, status)",
+  "CREATE INDEX IF NOT EXISTS submissions_challenge ON submissions(challengeId, status)",
+  "CREATE INDEX IF NOT EXISTS submissions_status ON submissions(status)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS submissions_one_open ON submissions(challengeId, wallet) WHERE status IN ('pending','approved','paying','paid')",
 ] as const;

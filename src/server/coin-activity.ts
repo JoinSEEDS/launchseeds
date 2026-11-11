@@ -12,7 +12,7 @@ export type CoinTrade = { signature: string; at: number; side: "buy" | "sell"; s
 type Cache = { at: number; trades: Map<string, CoinTrade | null>; order: string[]; pending: Promise<void> | null };
 const caches = new Map<string, Cache>();
 
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
+export async function rpc<T>(method: string, params: unknown[]): Promise<T> {
   let last: unknown;
   for (const url of rpcUrlList(process.env.SOLANA_RPC_URL || "")) {
     try {

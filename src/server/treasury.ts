@@ -66,6 +66,13 @@ export function dailyLoss(repo: TreasuryRepo, now: number) {
   return loss;
 }
 
+/** SOL in the treasury that belongs to coins' challenges: what they earned and
+ * have not been paid, minus what still waits in the vault (not yet claimed). */
+export function treasuryOwed(owedAll: bigint, unclaimedLamports: bigint) {
+  const owed = owedAll - unclaimedLamports;
+  return owed > 0n ? owed : 0n;
+}
+
 const sol = (value: string | undefined) => {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? BigInt(Math.round(n * 1e9)) : 0n;

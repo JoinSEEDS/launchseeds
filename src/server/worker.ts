@@ -2,6 +2,7 @@ import { createMeasure } from "measure-fn";
 import type { Store } from "./store";
 import type { LaunchService } from "./launch";
 import { storedLaunchSettings } from "../domain/launch-settings";
+import { isTreasury } from "./treasury";
 
 const { measure } = createMeasure("launchseeds:worker");
 
@@ -12,6 +13,8 @@ export async function runCycle(input: {
   launch?: LaunchService;
   /** Launch bundles ([launchseeds] launch_bundles): fills, exits, payouts. */
   bundles?: { tick(): Promise<string[]> };
+  /** Each live coin's creator fees, and claiming the treasury's vault. */
+  fees?: { sync(token: { id: number; mint: string }): Promise<number>; claim(): Promise<string> };
 }) {
   return measure("worker cycle", async () => {
     const errors: { tokenId: number; operation: string; error: string }[] = [];
@@ -30,6 +33,15 @@ export async function runCycle(input: {
       }
       if ((token.status === "funding" || token.status === "deploying") && input.launch)
         await attempt(token.id, "launch", () => input.launch!.process(token.id));
+    }
+    if (input.fees) {
+      for (const token of input.store.listLive())
+        if (token.mint && isTreasury(token.fundingWalletName))
+          await attempt(token.id, "coin fees", () => input.fees!.sync({ id: token.id, mint: token.mint }));
+      await attempt(0, "fee claim", async () => {
+        const line = await input.fees!.claim();
+        if (line !== "nothing to claim") console.log(`Fees: ${line}`);
+      });
     }
     if (input.bundles)
       await attempt(0, "launch bundles", async () => {

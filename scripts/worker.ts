@@ -8,13 +8,17 @@ import {
   readFileSync,
 } from "node:fs";
 import { getStore } from "../src/server/runtime";
-import { SolardLaunchProvider } from "../src/server/solard";
+import { SolardLaunchProvider, SolardSource } from "../src/server/solard";
 import { LaunchService } from "../src/server/launch";
 import { runCycle } from "../src/server/worker";
 import { runLaunchCycle, startLaunchLoop } from "../src/server/launch-loop";
 import { watchLaunchWake } from "../src/server/launch-wake";
 import { getWorkerHealth } from "../src/server/launch-health";
 import { solToLamports } from "../src/shared/domain";
+import { rpc as activityRpc } from "../src/server/coin-activity";
+import { creatorVault, syncCoinFees } from "../src/server/coin-fees";
+import { tickFeeClaim } from "../src/server/fee-claims";
+import { TREASURY_WALLET } from "../src/server/treasury";
 if (process.env.LAUNCHSEEDS_WORKER_ENABLED !== "true")
   throw new Error(
     "Workers are disabled. Configure and explicitly enable LAUNCHSEEDS_WORKER_ENABLED before running.",
@@ -78,6 +82,7 @@ const heartbeat = setInterval(() => health.touch(workerId), 5_000);
 heartbeat.unref();
 let running = true;
 let launchProvider: SolardLaunchProvider | undefined;
+let feeSource: SolardSource | undefined;
 let fastLaunch: ReturnType<typeof startLaunchLoop> | undefined;
 let closeLaunchWake: (() => void) | undefined;
 try {
@@ -133,6 +138,25 @@ try {
       store,
       launch: once ? launch : undefined,
       bundles: fastLaunch ? undefined : (launchProvider?.bundles ?? undefined),
+      fees: launchProvider ? (() => {
+        const provider = launchProvider!;
+        const treasury = provider.walletFor(TREASURY_WALLET).address;
+        return {
+          sync: (token: { id: number; mint: string }) => syncCoinFees({ repo: store.repo, rpc: activityRpc, tokenId: token.id, mint: token.mint, treasury }),
+          claim: () => tickFeeClaim(store.repo, {
+            vaultLamports: async () => BigInt(await provider.balanceLamports(creatorVault(treasury))),
+            claim: async (id) => {
+              // Any coin created by the treasury names the vault to claim.
+              const mint = store.listLive().find((t) => t.mint && t.fundingWalletName === TREASURY_WALLET)?.mint;
+              if (!mint) throw new Error("No coin to claim through");
+              feeSource ??= await SolardSource.createTrader(rpcUrl);
+              const result = await feeSource.claimCreatorFees(TREASURY_WALLET, mint, id);
+              const paid = result.payouts.find((p: { address: string }) => p.address === treasury);
+              return { signature: result.signature, lamports: paid ? BigInt(paid.amountRaw) : 0n };
+            },
+          }),
+        };
+      })() : undefined,
     });
     if (!fastLaunch)
       health.finishCycle(
@@ -158,6 +182,7 @@ try {
   clearInterval(heartbeat);
   health.stop(workerId);
   launchProvider?.close();
+  feeSource?.close();
   store.close();
   closeSync(lock);
   unlinkSync(lockPath);

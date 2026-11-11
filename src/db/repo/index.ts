@@ -8,6 +8,7 @@ import type { LaunchseedsDatabase } from "../connection";
 import { scheduledPlansRepo } from "./scheduled-plans";
 import { tokenRepo } from "./tokens";
 import { depositRepo } from "./deposits";
+import { challengesRepo } from "./challenges";
 
 export function createRepo(db: LaunchseedsDatabase) {
   const r = {
@@ -16,6 +17,7 @@ export function createRepo(db: LaunchseedsDatabase) {
     scheduledPlans: scheduledPlansRepo(db),
     tokens: tokenRepo(db),
     deposits: depositRepo(db),
+    challenges: challengesRepo(db),
   };
 
   return {
