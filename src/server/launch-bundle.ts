@@ -16,6 +16,8 @@ export const EXIT_MINIMUM_BPS = 10_200n;
 export const MIN_BUYER_LAMPORTS = 30_000_000;
 /** v1 transactions hold up to 4096 bytes. */
 export const V1_PACKET_LIMIT = 4096;
+/** A v0 transaction's wire limit; Jito bundles take v0. */
+export const V0_PACKET_LIMIT = 1232;
 
 export function launchBundlesEnabled(env: NodeJS.ProcessEnv = process.env) {
   return env.LAUNCHSEEDS_LAUNCH_BUNDLES === "true";

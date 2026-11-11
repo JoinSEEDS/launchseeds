@@ -11,6 +11,7 @@ import {
   BUNDLE_BUYERS,
   JITO_TIP_LAMPORTS,
   V1_PACKET_LIMIT,
+  V0_PACKET_LIMIT,
   bundleWalletName,
   fundBuyers,
   type BundleBuyer,
@@ -264,7 +265,7 @@ export async function prepareBundle(
     throw new Error("Launch does not fit one Jito bundle");
   const transactions = planned.map((p) => p.transaction.serialize());
   for (const bytes of transactions)
-    if (bytes.length > V1_PACKET_LIMIT)
+    if (bytes.length > V0_PACKET_LIMIT)
       throw new Error(`Launch transaction too large (${bytes.length} bytes)`);
   const signatures = planned.map((p) =>
     bs58.encode(p.transaction.signatures[0]!),

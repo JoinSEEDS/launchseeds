@@ -270,12 +270,13 @@ export class SolardLaunchProvider implements LaunchProvider {
     const name: string = "@solard/core";
     provider.vanityPool = (await import(name)) as VanityPool;
     if (launchBundlesEnabled()) {
-      // Same wallet store, v1 transactions (bundle packets exceed the legacy limit).
+      // Same wallet store, v0 transactions: Jito's block engine rejects the v1 wire format
+      // ("Invalid"), and one buy per transaction fits the 1232-byte packet.
       const v1 = sdk.createTraderSolard({
         rpcUrl,
         rpcUrls: rpcUrlList(rpcUrl),
         dbPath: process.env.SOLARD_DB_PATH || "./data/solard.sqlite",
-        transactionVersion: 1,
+        transactionVersion: 0,
       } as never);
       provider.bundleContext = {
         connection: provider.connection,
