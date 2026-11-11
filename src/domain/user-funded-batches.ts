@@ -16,7 +16,9 @@ const wallet = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
 export const BatchExitSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("immediate") }).strict(),
   /** Sells this many seconds after its buy is final (0: at once). */
-  z.object({ kind: z.literal("after"), seconds: z.number().int().min(0).max(86_400) }).strict(),
+  /** With `holdFloorSeconds`, for that long after its time it only sells while the
+   * market cap stays at or above where the launch bundle left it; then at market. */
+  z.object({ kind: z.literal("after"), seconds: z.number().int().min(0).max(86_400), holdFloorSeconds: z.number().int().min(0).max(3_600).optional() }).strict(),
   z.object({ kind: z.literal("time"), at: z.number().int().positive().safe() }).strict(),
   z.object({ kind: z.literal("profit"), profitBps: z.number().int().min(1).max(100_000) }).strict(),
   /** Sells everything together, as soon as that leaves the USD market cap at or above `usd`. */
@@ -128,6 +130,17 @@ export function startingMcapSol(buyLamports: number) {
  * constant-product curve a fixed sale pays less the lower it starts, so the
  * output of the sale that ends exactly on the floor is the least any sale ending
  * at or above it can pay, less Pump's fee. Null when no sale of this size can clear. */
+/** A new Pump coin's virtual token reserves before any buy (raw units). */
+export const PUMP_INITIAL_VIRTUAL_BASE = 1_073_000_000_000_000n;
+/** The market cap (lamports) right after the launch bundle bought `bundleRaw`
+ * tokens: the curve's constant product (from live reserves) at the virtual
+ * token reserves the bundle left. Fees never enter the curve, so k holds. */
+export function postBundleMarketCapLamports(input: { virtualQuote: bigint; virtualBase: bigint; supply: bigint; bundleRaw: bigint }) {
+  const base = PUMP_INITIAL_VIRTUAL_BASE - input.bundleRaw;
+  if (input.bundleRaw <= 0n || base <= 0n || input.virtualQuote <= 0n || input.virtualBase <= 0n) throw new Error("Invalid bundle for its market cap.");
+  const k = Number(input.virtualQuote) * Number(input.virtualBase);
+  return (k / Number(base) / Number(base)) * Number(input.supply);
+}
 export function floorSaleMinimum(input: { virtualQuote: bigint; virtualBase: bigint; supply: bigint; sellRaw: bigint; floorLamports: number }) {
   const quote = Number(input.virtualQuote), base = Number(input.virtualBase), sell = Number(input.sellRaw), k = quote * base;
   if (!(quote > 0 && base > 0 && sell > 0 && input.floorLamports > 0 && input.supply > 0n)) throw new Error("Invalid floor sale.");

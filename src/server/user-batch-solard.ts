@@ -3,7 +3,7 @@ import { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentIn
 import bs58 from "bs58";
 import type { LaunchseedsRepo } from "../db/repo";
 import { saleBuyers, type UserBatchChain, type UserBatchState } from "./user-batch-engine";
-import { floorSaleMinimum } from "../domain/user-funded-batches";
+import { floorSaleMinimum, postBundleMarketCapLamports } from "../domain/user-funded-batches";
 import type { CoinLiquidationChain } from "./coin-liquidation";
 import type { BundleContext, PreparedExit } from "./launch-bundle-solard";
 import { simulateRaw } from "./launch-bundle-solard";
@@ -143,7 +143,7 @@ export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,load
       }
       return (await compile(intent.fundingWallet,[intent.fundingWallet,...state.buyers.map(b=>b.wallet)],instructions,1_400_000)).signed;
     },
-    async prepareSale(state,requiredOutput,floorUsd){
+    async prepareSale(state,requiredOutput,floorUsd,afterBundleRaw){
       const moduleName:string="@solard/core/venues/pump/pump-plugin.ts";
       const {PumpPlugin}=await import(moduleName) as {PumpPlugin:new()=>Plugin};
       const sellers=saleBuyers(state);
@@ -169,13 +169,15 @@ export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,load
         if(buyer.wallet!==seller&&fill>0n)instructions.push(createTransferCheckedInstruction(getAssociatedTokenAddressSync(mint,new PublicKey(buyer.wallet),false,market.baseTokenProgram),mint,sellerAccount,new PublicKey(buyer.wallet),fill,metadata.decimals,[],market.baseTokenProgram));
       }
       if(total===0n)throw Error("Nothing left to sell in this column");
-      const limited=requiredOutput!==null||floorUsd!==undefined;
+      const limited=requiredOutput!==null||floorUsd!==undefined||afterBundleRaw!==undefined;
       const quote=await plugin.quoteSell(context,market,total,limited?0:500);
       let minimumOutput=requiredOutput;
-      if(floorUsd!==undefined){
+      if(floorUsd!==undefined||afterBundleRaw!==undefined){
         const reserves=market.metadata?.curve??market.metadata?.reserves;
         if(!reserves)throw Error("Floor sale needs the market's reserves");
-        minimumOutput=floorSaleMinimum({...reserves,supply:metadata.supply,sellRaw:total,floorLamports:floorUsd/await solUsd()*1e9});
+        // In SOL, not USD: the market cap the launch bundle left, or the USD floor.
+        const floorLamports=afterBundleRaw!==undefined?postBundleMarketCapLamports({...reserves,supply:metadata.supply,bundleRaw:afterBundleRaw}):floorUsd!/await solUsd()*1e9;
+        minimumOutput=floorSaleMinimum({...reserves,supply:metadata.supply,sellRaw:total,floorLamports});
         if(minimumOutput===null)throw Error("This sale is too large to clear its market cap floor");
       }
       if(minimumOutput!==null){quote.minimumOutputRaw=minimumOutput;quote.meta={...quote.meta,absoluteMinimumOutputRaw:String(minimumOutput),preparedLimitOrder:true};}

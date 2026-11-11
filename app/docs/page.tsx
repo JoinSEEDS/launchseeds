@@ -55,7 +55,7 @@ export default function DocsPage() {
             <ul>
               <li><b>Launch time</b>: about two minutes after you sign.</li>
               <li><b>Launch buy</b>: the treasury buys in four wallets, up to 3 SOL in all.</li>
-              <li><b>Sells</b>: the four wallets sell 0, 3, 5 and 10 seconds after their buys are final.</li>
+              <li><b>Sells</b>: the four wallets sell 0, 3, 5 and 10 seconds after their buys are final. For up to a minute, a wallet only sells if the market cap stays at or above where the launch buy left it; then it sells anyway.</li>
               <li><b>Fees</b>: the token’s creator fee goes to the treasury: 90% for its challenges, 10% to buy back and burn $SEEDS.</li>
               <li><b>Limit</b>: one launch per wallet a day.</li>
             </ul>

@@ -1,3 +1,4 @@
+import { TRANCHE_ROW_OFFSET } from "../domain/user-funded-batches";
 import { z } from "zod";
 import { MAX_TRANCHES, TrancheSchema, UserBatchSchema, batchMinimumOutput } from "../domain/user-funded-batches";
 import type { LaunchseedsRepo } from "../db/repo";
@@ -36,6 +37,8 @@ export const UserBatchStateSchema = z.object({
   ladderNet:amount.default("0"),
   /** When the buy became final: an "after" sale counts its seconds from here. */
   holdingSince:z.number().int().nonnegative().nullable().default(null),
+  /** The prepared sale keeps the market cap at the post-bundle level. */
+  floorSale:z.boolean().default(false),
 }).strict();
 export type UserBatchState = z.infer<typeof UserBatchStateSchema>;
 type Signed = z.infer<typeof signed>;
@@ -54,7 +57,7 @@ export type UserBatchChain = {
   fills(tokenId:number,batchIndex:number,state:UserBatchState):Promise<{fills:bigint[];cost:bigint}|null>;
   /** Consolidate recorded fills and sell once, atomically enforcing the combined
    * SOL minimum, or the minimum that keeps the market cap at `floorUsd`. */
-  prepareSale(state:UserBatchState,minimumOutput:bigint|null,floorUsd?:number):Promise<Signed>;
+  prepareSale(state:UserBatchState,minimumOutput:bigint|null,floorUsd?:number,afterBundleRaw?:bigint):Promise<Signed>;
   needsRefresh(height:number):Promise<boolean>;
   simulate(transaction:string):Promise<string|null>;
   send(transaction:string):Promise<void>;
@@ -140,14 +143,27 @@ export class UserBatchEngine {
         if(exit.kind==="time"&&this.now()<exit.at)return "waiting for scheduled sale";
         if(exit.kind==="after"&&this.now()<(state.holdingSince??0)+exit.seconds*1000)return "waiting for scheduled sale";
         const floorUsd=exit.kind==="floor"||exit.kind==="ladder"?exit.usd:undefined;
+        // For a while after its time, an "after" sale may not take the market cap
+        // below where the launch bundle left it; past that, it sells at market.
+        const floorUntil=exit.kind==="after"&&exit.holdFloorSeconds?(state.holdingSince??0)+(exit.seconds+exit.holdFloorSeconds)*1000:0;
+        const holdFloor=this.now()<floorUntil;
+        const others=this.repo.userBatches.byToken(row.tokenId).filter(other=>other.id!==row.id).map(other=>({row:other,state:UserBatchStateSchema.parse(JSON.parse(other.stateJson))}));
         // Each floor sale is judged after the last one lands, not alongside it.
-        if(floorUsd!==undefined&&this.repo.userBatches.byToken(row.tokenId).some(other=>other.id!==row.id&&UserBatchStateSchema.parse(JSON.parse(other.stateJson)).status==="exiting"))return "waiting for this coin's other sale";
+        if((floorUsd!==undefined||holdFloor)&&others.some(other=>other.state.status==="exiting"))return "waiting for this coin's other sale";
+        let bundleRaw:bigint|undefined;
+        if(holdFloor){
+          const columns=[state,...others.filter(other=>other.row.batchIndex<TRANCHE_ROW_OFFSET).map(other=>other.state)];
+          if(columns.some(column=>!column.fills.length))return "waiting for the bundle's fills";
+          bundleRaw=columns.reduce((n,column)=>n+column.fills.reduce((m,f)=>m+BigInt(f),0n),0n);
+        }
         let ready=state.sale;
+        if(ready&&state.floorSale&&!holdFloor)ready=null; // the hold is over: sell at market
         if(!ready||await this.chain.needsRefresh(ready.lastValidBlockHeight)){
           const minimum=exit.kind==="profit"?batchMinimumOutput(BigInt(state.buyCostLamports),exit.profitBps,this.chain.sellFeeCap,this.chain.settlementFeeCap):null;
-          ready=await this.chain.prepareSale(state,minimum,floorUsd);
+          try{ready=await this.chain.prepareSale(state,minimum,floorUsd,bundleRaw);}
+          catch(error){if(holdFloor&&error instanceof Error&&/too large to clear/.test(error.message))return "holding: market cap below its post-bundle level";throw error;}
           // A finalized ladder sells every remaining wallet in this one sale.
-          save({sale:ready,error:null,...(state.forced&&state.config.exit.kind==="ladder"?{ladderIndex:state.buyers.length-1}:{})});
+          save({sale:ready,error:null,floorSale:bundleRaw!==undefined,...(state.forced&&state.config.exit.kind==="ladder"?{ladderIndex:state.buyers.length-1}:{})});
           return "atomic sale prepared";
         }
         const problem=await this.chain.simulate(ready.transaction);

@@ -17,8 +17,11 @@ import { notifyLaunchWorker } from "./launch-wake";
 export const LAUNCH_DELAY_MS = 130_000;
 /** When each bundle wallet sells, in seconds after the buy is final. */
 export const SELL_AFTER_SECONDS = [0, 3, 5, 10];
+/** For up to this long after its time, a bundle wallet only sells while the
+ * market cap stays at or above where the bundle left it; then at market. */
+export const HOLD_FLOOR_SECONDS = 60;
 /** About how long one launch holds the treasury: the delay, the launch, the sells and their payback. */
-export const LAUNCH_SLOT_MS = LAUNCH_DELAY_MS + 70_000;
+export const LAUNCH_SLOT_MS = LAUNCH_DELAY_MS + 130_000;
 
 export type QueuedInput = { name: string; symbol: string; description: string; image: string; website: string; x: string; telegram: string; devBuySol: string };
 type Provider = { walletFor(name: string): { address: string }; balanceLamports(address: string): Promise<number | bigint> };
@@ -72,7 +75,7 @@ export function advanceQueue(store: Store, service: LaunchService, provider: Pro
       publishProject: true,
       scheduledAt: now() + LAUNCH_DELAY_MS,
       // One wallet per column; each sells on its own, spaced out after the buy.
-      userBatches: { proceedsWallet: treasury, columns: buys.map((buy, i) => ({ slots: [Number(buy)], exit: { kind: "after", seconds: SELL_AFTER_SECONDS[i]! } })) },
+      userBatches: { proceedsWallet: treasury, columns: buys.map((buy, i) => ({ slots: [Number(buy)], exit: { kind: "after", seconds: SELL_AFTER_SECONDS[i]!, holdFloorSeconds: HOLD_FLOOR_SECONDS } })) },
       bundleLamports: Number(buys.reduce((a, b) => a + b, 0n)),
       // The treasury is every coin's dev and fee recipient; each coin's share is tracked.
       feesTo: treasury,
