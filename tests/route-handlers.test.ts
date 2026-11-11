@@ -7,8 +7,7 @@ import { GET as health } from "../app/api/health/route";
 import { GET as tokens } from "../app/api/tokens/route";
 import { GET as tokenDetails } from "../app/api/tokens/[uid]/route";
 import { GET as tokenMetadata } from "../app/api/metadata/[uid]/route";
-import { GET as launchStatus } from "../app/api/launches/[uid]/route";
-import { POST as prepareLaunch } from "../app/api/launches/route";
+import { POST as seedLaunch } from "../app/api/seeds/route";
 
 process.env.LAUNCHSEEDS_DB_PATH = ":memory:";
 process.env.LAUNCHSEEDS_LAUNCH_ENABLED = "false";
@@ -37,22 +36,22 @@ describe("method-specific route handlers", () => {
   });
 
   test("launch mutation rejects absent origin before touching funding", async () => {
-    const request = new Request(`${origin}/api/launches`, {
+    const request = new Request(`${origin}/api/seeds`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ firstStrategy: { type: "burn", amount: 25 } }),
+      body: JSON.stringify({ name: "X", symbol: "X" }),
     });
-    const response = await prepareLaunch(request);
+    const response = await seedLaunch(request);
     expect(response.status).toBe(403);
   });
 
   test("launch mutation does not prepare wallets in disabled mode", async () => {
-    const request = new Request(`${origin}/api/launches`, {
+    const request = new Request(`${origin}/api/seeds`, {
       method: "POST",
       headers: { origin, "content-type": "application/json" },
       body: "{}",
     });
-    const response = await prepareLaunch(request);
+    const response = await seedLaunch(request);
     expect(response.status).toBe(503);
     expect(JSON.stringify(await body(response))).toContain(
       "temporarily unavailable",
@@ -65,9 +64,6 @@ describe("method-specific route handlers", () => {
       tokenMetadata(url("/api/metadata/not-a-uuid")),
     ];
     for (const response of routes) expect(response.status).toBe(404);
-    expect((await launchStatus(url("/api/launches/not-a-uuid"))).status).toBe(
-      404,
-    );
   });
 
 
@@ -79,8 +75,7 @@ test("routes are independently implemented rather than method/path dispatched", 
     "app/api/tokens/route.ts",
     "app/api/tokens/[uid]/route.ts",
     "app/api/metadata/[uid]/route.ts",
-    "app/api/launches/route.ts",
-    "app/api/launches/[uid]/route.ts",
+    "app/api/seeds/route.ts",
   ]) {
     const source = readFileSync(file, "utf8");
     expect(source).not.toContain("handleApi");

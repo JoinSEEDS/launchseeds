@@ -22,7 +22,7 @@ import { safeInteger, positive } from "../shared/domain";
 import type { LaunchProvider } from "./launch";
 import { Store } from "./store";
 import { Database } from "bun:sqlite";
-import { isOwnDeployer } from "./own-deployer";
+import { isTreasury } from "./treasury";
 import { createRpcConnection, rpcFetch } from "./rpc-pacing";
 import { lastKnownSolUsd, rememberSolUsd } from "./sol-price";
 import { UserBatchEngine, UserBatchStateSchema } from "./user-batch-engine";
@@ -378,7 +378,6 @@ export class SolardLaunchProvider implements LaunchProvider {
       walletName = `launchseeds-${this.walletAddress(mintSignerRef)}`;
     }
     // An own wallet's key was stored at creation; never swap in a new wallet.
-    if (isOwnDeployer(walletName) && !this.sdk.listWallets().some((w) => w.name === walletName)) throw new ApiError("This launch's wallet key is gone. Start a new launch.", 409);
     const wallet = this.findOrCreateWallet(walletName);
     return {
       fundingWallet: wallet.address,
@@ -526,18 +525,7 @@ export class SolardLaunchProvider implements LaunchProvider {
       return funded;
     });
   }
-  rememberDeployer(keypair: Keypair, name: string) {
-    const address = keypair.publicKey.toBase58();
-    const known = this.sdk.listWallets().find((w) => w.address === address);
-    if (known && known.name !== name) throw new ApiError("This wallet can't be used. Use another one.", 400);
-    if (!known) this.sdk.importWallet(JSON.stringify([...keypair.secretKey]), name);
-  }
-  forgetWallet(name: string) {
-    if (!isOwnDeployer(name)) throw new Error("Only a launcher's wallet can be forgotten");
-    const db = new Database(process.env.SOLARD_DB_PATH || "./data/solard.sqlite");
-    try { db.query("DELETE FROM wallets WHERE name = ?").run(name); } finally { db.close(); }
-  }
-  /** An own wallet pays from what it holds, whenever it came. */
+  /** The treasury pays from what it holds, whenever it came. */
   private async ownWalletPayment(tokenId: number, fundingWallet: string, required: bigint) {
     const context = await this.connection.getBalanceAndContext(new PublicKey(fundingWallet), "finalized");
     if (required <= 0n || BigInt(context.value) < required) return [];
@@ -545,7 +533,7 @@ export class SolardLaunchProvider implements LaunchProvider {
   }
   async deposits(tokenId: number, fundingWallet: string) {
     const token = this.store.repo.tokens.get(tokenId);
-    if (isOwnDeployer(token?.fundingWalletName)) return this.ownWalletPayment(tokenId, fundingWallet, BigInt(token!.requiredLamports));
+    if (isTreasury(token?.fundingWalletName)) return this.ownWalletPayment(tokenId, fundingWallet, BigInt(token!.requiredLamports));
     const signatures = await this.connection.getSignaturesForAddress(
       new PublicKey(fundingWallet),
       { limit: 100 },

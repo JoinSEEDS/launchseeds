@@ -1,10 +1,21 @@
 import { apiJson } from "../../../lib/api-security";
 import { getOperationalLaunchReadiness } from "../../../src/server/launch-health";
 import { solUsd } from "../../../src/server/solard";
+import { getLaunchProvider } from "../../../src/server/runtime";
+import { maxBundleLamports, seedBuys, TREASURY_WALLET } from "../../../src/server/treasury";
 
 /** Configuration and actual operational launch readiness are not synonymous. */
 export async function GET(): Promise<Response> {
   const readiness = await getOperationalLaunchReadiness();
+  /** What the next launch's bundle buys with: the treasury above its reserve. */
+  let seedBundleLamports: number | null = null;
+  try {
+    const provider = readiness.enabled ? await getLaunchProvider() : null;
+    if (provider) {
+      const buys = seedBuys(BigInt(await provider.balanceLamports(provider.walletFor(TREASURY_WALLET).address)), BigInt(readiness.baseFeeLamports ?? 0), maxBundleLamports());
+      seedBundleLamports = buys ? Number(buys.reduce((a, b) => a + b, 0n)) : 0;
+    }
+  } catch {}
   return apiJson(
     {
       launchEnabled: readiness.enabled,
@@ -14,11 +25,9 @@ export async function GET(): Promise<Response> {
       rpcReady: readiness.rpcReady,
       checkedAt: readiness.checkedAt,
       imageGeneration: process.env.LAUNCHSEEDS_IMAGE_GENERATION === "true",
-      userFundedBatches: process.env.LAUNCHSEEDS_USER_BATCHES === "true" && process.env.LAUNCHSEEDS_LAUNCH_BUNDLES === "true",
+      seedBundleLamports,
       solUsd: await solUsd().catch(() => null),
-      message: readiness.enabled
-        ? "Final funding requirements are confirmed during preparation."
-        : "Token launches are temporarily unavailable. Do not send funds.",
+      message: readiness.enabled ? "" : "Launches are temporarily unavailable.",
     },
     200,
     { "cache-control": "no-store" },

@@ -12,8 +12,8 @@ test("one canonical route pattern exists for each page and API", () => {
   expect(new Set(identities).size).toBe(routes.length);
   const paths = routes.map((route) => route.pattern);
   expect(paths).toContain("/admin");
-  expect(paths).toContain("/api/launches");
-  for (const retired of ["/api/launch", "/api/odds", "/api/ballots/:id"])
+  expect(paths).toContain("/api/seeds");
+  for (const retired of ["/api/launch", "/api/launches", "/api/launch-payment", "/api/odds"])
     expect(paths).not.toContain(retired);
 });
 test("incompatible database layout is rejected before migrations without changing disk data", () => {

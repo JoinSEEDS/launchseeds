@@ -45,6 +45,10 @@ function launchRuntime() {
     throw error;
   }));
 }
+/** The live Solard provider (treasury, wallets), or null while launches are off. */
+export async function getLaunchProvider() {
+  return (await launchRuntime()).provider;
+}
 export async function getLaunchService() {
   return (await launchRuntime()).service;
 }

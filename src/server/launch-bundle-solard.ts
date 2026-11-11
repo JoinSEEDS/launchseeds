@@ -227,13 +227,10 @@ export async function prepareBundle(
   const tips = await core.getJitoTipAccounts();
   const tip = new PublicKey(tips[Math.floor(Math.random() * tips.length)]!);
   const { SystemProgram } = await import("@solana/web3.js");
-  // One transaction per column, signed and paid by the column's signer (its
-  // first slot) with the column's fresh wallets co-signing.
-  const columns = [...new Set(buyers.map((buyer) => buyer.batchIndex ?? 0))].sort((a, b) => a - b);
-  const groups = columns.map((batchIndex) => buyers.map((buyer, index) => ({ buyer, index })).filter((entry) => entry.buyer.batchIndex === batchIndex)
-    .sort((a, b) => Number(b.buyer.role === "signer") - Number(a.buyer.role === "signer")));
-  if (groups.some((group) => !group.length)) throw Error("Every launch column needs a buyer");
-  if ((groups.length > 4 || columns.some((c, i) => c !== i))) throw Error("A launch has one to four consecutive columns");
+  // One buy transaction per wallet, each signed and paid by that wallet; the
+  // creation funds every wallet first. A Jito bundle holds five transactions.
+  const groups = buyers.map((buyer, index) => [{ buyer, index }]);
+  if (!groups.length || groups.length > 4) throw Error("A launch has one to four bundle wallets");
   const last = groups.length - 1;
   const planned = await ctx.trader.compileGroups([
     {
@@ -259,7 +256,7 @@ export async function prepareBundle(
             ]
           : []),
       ],
-      cuLimit: 1_200_000,
+      cuLimit: 300_000,
       priorityMicroLamports: 0,
     })),
   ]);

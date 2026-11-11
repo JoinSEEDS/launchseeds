@@ -11,7 +11,7 @@ export default function RootLayout({ children }: { children: any }) {
         <title>{SITE_NAME}</title>
         <meta
           name="description"
-          content={`${SITE_NAME} · Scheduled launches with public execution rules`}
+          content={`${SITE_NAME} · Free coin launches`}
         />
       </head>
       <body>
@@ -60,7 +60,7 @@ export default function RootLayout({ children }: { children: any }) {
                 Connect Wallet
               </button>
               <a className="btn btn--primary topbar__launch" href="/launch">
-                Schedule Launch
+                Launch
               </a>
             </div>
           </header>

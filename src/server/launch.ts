@@ -14,7 +14,7 @@ import {
   storedLaunchSettings,
   type LaunchSettings,
 } from "../domain/launch-settings";
-import { deployerInUse, deployerKeypair, isOwnDeployer, needsDeployer, ownDeployerName } from "./own-deployer";
+import { isTreasury, TREASURY_WALLET, treasuryBusy } from "./treasury";
 import { Store, safeNumber } from "./store";
 import type { Token } from "../db/schema";
 import {
@@ -32,10 +32,6 @@ export interface LaunchProvider {
   /** User-funded columns: per column, a pool signer then fresh wallets; then
    * each tranche's fresh wallets. Fresh wallets are reused when free. */
   planColumns?(token: { id: number; mintSignerRef: string; fundingWallet?: string | null }, columns: bigint[][], tranches?: bigint[][]): BundleBuyer[];
-  /** Keeps a launcher's own key for a launch; refuses a wallet LaunchSeeds already holds. */
-  rememberDeployer?(keypair: Keypair, name: string): void;
-  /** Deletes a launcher's key from the wallet store. */
-  forgetWallet?(name: string): void;
   /** Balance hints only; deposit history remains authoritative for funding. */
   fundedWallets?(wallets: string[]): Promise<Set<string>>;
   /** Generates and stores the token's mint keypair; the CA stays private until deployed. */
@@ -143,7 +139,8 @@ export class LaunchService {
     capability: string,
     onCreated?: (tokenId: number) => void,
     settings: LaunchSettings = DEFAULT_LAUNCH_SETTINGS,
-    deployerKey?: string,
+    /** The wallet that signed the launch request: the coin's bounty manager. */
+    creatorWallet: string | null = null,
   ) {
     if (!this.provider) throw new Error("Launch service is not configured");
     if (settings.userBatches && !this.provider.userBatches) throw new ApiError("User-funded batches are not enabled on this deployment.",503);
@@ -151,25 +148,19 @@ export class LaunchService {
     if (!/^[a-f0-9]{64}$/.test(capability))
       throw new Error("Invalid launch key");
     const launchSettingsJson = canonicalLaunchSettings(settings);
-    const deployer = deployerKey ? deployerKeypair(deployerKey) : null;
-    // The key leaves the wallet store after launch, so nothing later may need it.
-    if (deployer && (!settings.userBatches || !settings.feesTo || !this.provider.rememberDeployer))
-      throw new ApiError("Deploying from your wallet needs funded columns and a creator-fee wallet.", 400);
-    const deployerName = deployer ? ownDeployerName(deployer.publicKey.toBase58()) : null;
     // The columns are the launch buy; there is no separate dev buy.
     if (solToLamports(input.devBuySol) > 0)
       throw new Error("A launch buys through its columns, not a separate dev buy");
     const accessHash = hash(capability),
       requestHash = hash(
-        JSON.stringify({ input, settingsJson: launchSettingsJson, ...(deployerName ? { deployerName } : {}) }),
+        JSON.stringify({ input, settingsJson: launchSettingsJson, creatorWallet }),
       );
     const existingId = this.existing(accessHash, requestHash);
     let tokenId = existingId;
     if (tokenId === null) {
       validateSchedule(settings);
-      const walletBusy = () => new ApiError("This wallet has a launch in progress. Wait for it to finish.", 409);
-      if (deployerName && deployerInUse(this.store.repo, deployerName)) throw walletBusy();
-      if (deployer) this.provider.rememberDeployer!(deployer, deployerName!);
+      const busy = () => new ApiError("Another coin is launching. Try again in a few minutes.", 409);
+      if (treasuryBusy(this.store.repo)) throw busy();
       // A lost race leaves only an unused, unfunded mint key behind.
       const mint = this.provider.createMint();
       tokenId = this.store.repo.tx((tx) => {
@@ -179,7 +170,7 @@ export class LaunchService {
             throw new Error("Launch key already used for another request");
           return raced.id;
         }
-        if (deployerName && deployerInUse(tx, deployerName)) throw walletBusy();
+        if (treasuryBusy(tx)) throw busy();
         return tx.tokens.insert({
           handle: launchHandle(mint.mint),
           mint: null,
@@ -193,8 +184,8 @@ export class LaunchService {
           x: input.x,
           telegram: input.telegram,
           fundingWallet: null,
-          fundingWalletName: deployerName,
-          creatorWallet: null,
+          fundingWalletName: TREASURY_WALLET,
+          creatorWallet,
           rewardWallet: null,
           launcherWallet: null,
           refundWallet: null,
@@ -229,7 +220,7 @@ export class LaunchService {
       const tranches = allocateTranches(settings.userBatches, settings.scheduledAt);
       const buyers = this.provider.planColumns({ id: token.id, mintSignerRef: token.mintSignerRef, fundingWallet: token.fundingWallet }, layout.map((column) => column.budgets), tranches.map((t) => t.budgets));
       const proceeds = settings.userBatches.proceedsWallet;
-      if (buyers.some((buyer) => buyer.wallet === proceeds) || (proceeds === token.fundingWallet && !isOwnDeployer(token.fundingWalletName)))
+      if (buyers.some((buyer) => buyer.wallet === proceeds) || (proceeds === token.fundingWallet && !isTreasury(token.fundingWalletName)))
         throw new ApiError("Choose an external proceeds wallet, not a launch or buyer wallet.", 400);
       return buyers;
     }
@@ -384,9 +375,9 @@ export class LaunchService {
     const wallets = preparedWallets(token);
     try {
       const verifyUnfunded = async () => {
-        // An own wallet may hold SOL already; only a full balance counts as paid.
+        // The treasury holds SOL already; only a full balance counts as paid.
         if (
-          !isOwnDeployer(token.fundingWalletName) &&
+          !isTreasury(token.fundingWalletName) &&
           this.provider!.hasIncomingFunds &&
           (await this.provider!.hasIncomingFunds(wallets.fundingWallet))
         ) {
@@ -600,16 +591,6 @@ export class LaunchService {
       }
       return true;
     });
-  }
-  forgetFinishedDeployers(now = Date.now()) {
-    const forget = this.provider?.forgetWallet?.bind(this.provider);
-    if (!forget) return;
-    const repo = this.store.repo;
-    const tokens = repo.tokens.all().filter((t) => isOwnDeployer(t.fundingWalletName));
-    for (const token of tokens)
-      if (token.status === "funding" && !needsDeployer(repo, token, now)) repo.tokens.expireFunding(token.id);
-    for (const name of new Set(tokens.map((t) => t.fundingWalletName!)))
-      if (!deployerInUse(repo, name, now)) forget(name);
   }
   private async processLeased(tokenId: number, assertLease: () => void) {
     const provider = this.provider!;

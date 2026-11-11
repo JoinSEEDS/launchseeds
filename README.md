@@ -1,27 +1,19 @@
 # LaunchSeeds
 
-A launchpad for Pump.fun coins with scheduled, published launch plans.
-
-A launcher picks a launch time and splits the launch buy across up to four
-columns of wallets. Each column buys in the same Jito bundle that creates the
-coin, so nobody can buy before them. The plan is published, with every wallet,
-its buy and its sell rule, before the coin exists.
+Free Pump.fun launches, paid for by the LaunchSeeds treasury.
 
 ## How a launch works
 
-1. **Plan.** Name, ticker, image, launch time, and the columns: how many wallets,
-   what each buys, and when they sell. Optional tranches buy after the launch.
-2. **Pay.** The form shows one deposit address and the exact amount: every buy,
-   each wallet's network reserve, and the launch fee.
-3. **Launch.** At the launch time the worker sends one Jito bundle: the coin's
-   creation, then one buy transaction per column.
-4. **Sell.** Each column sells all its wallets together on its own rule: a profit
-   target, a time, at once, or a market-cap floor that the sale must leave
-   behind. A tranche can also sell one wallet at a time.
-5. **Pay out.** After a sale, the column's SOL goes to the proceeds wallet in
-   the plan.
+1. **Sign in.** The creator signs one message with a Solana wallet. One launch
+   per wallet a day, and a daily limit for the whole site.
+2. **Describe the coin.** Name, ticker, image, description and links.
+3. **Launch.** The treasury creates the coin in a Jito bundle with four wallets,
+   each buying in its own transaction. Together they spend what the treasury
+   holds above a small reserve.
+4. **Sell.** As soon as the coin exists, the four wallets sell together in one
+   transaction, and the SOL goes back to the treasury for the next launch.
 
-The coin's creator fees go to the creator-fee wallet in the plan.
+One launch runs at a time. The coin's creator fees collect in its own wallet.
 
 ## Run it
 
@@ -36,6 +28,7 @@ bun run scripts/worker.ts   # the launch worker, in a second terminal
 
 Nothing sends a transaction until `LAUNCHSEEDS_LIVE_OPERATIONS`,
 `LAUNCHSEEDS_LAUNCH_ENABLED` and `LAUNCHSEEDS_WORKER_ENABLED` are all `true`.
+The treasury is the Solard wallet named `launchseeds-treasury`; fund it with SOL.
 
 ## Check it
 

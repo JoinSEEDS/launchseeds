@@ -43,7 +43,7 @@ export function TokenCards({ items }: { items: TokenCardData[] }) {
               {c.mint ? <p className="mono" style={{overflowWrap:"anywhere",fontSize:"11px"}}>CA: {c.mint}</p> : null}
               {c.scheduledAt ? (
                 <div className="card-schedule">
-                  <span className="label label--sm">Scheduled (UTC)</span>
+                  <span className="label label--sm">Launch (UTC)</span>
                   <time dateTime={new Date(c.scheduledAt).toISOString()}>
                     {new Date(c.scheduledAt)
                       .toISOString()
@@ -86,7 +86,7 @@ export function TokenCards({ items }: { items: TokenCardData[] }) {
           <h2>No matching launches</h2>
           <p>No live tokens yet.</p>
           <a className="btn btn--primary" href="/launch">
-            Schedule a launch
+            Launch a coin
           </a>
         </div>
       )}

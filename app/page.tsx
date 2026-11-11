@@ -13,22 +13,21 @@ export function renderHomePage(store: ReturnType<typeof getStore>, input?: Catal
     <main className="page launchpad-page">
       <section className="launchpad-hero">
         <div>
-          <span className="eyebrow">PUBLIC PLANS. VISIBLE EXECUTION.</span>
+          <span className="eyebrow">FREE LAUNCHES</span>
           <h1>
-            Know the plan.
+            Launch a coin.
             <br />
-            <span>Before the launch.</span>
+            <span>Free.</span>
           </h1>
           <p>
-            Scheduled launches whose buy wallets and sell rules are published
-            before the coin exists.
+            The treasury buys it in the launch bundle and sells right after.
           </p>
           <a className="btn btn--primary" href="/launch">
-            Schedule a launch <span aria-hidden="true">&#8599;</span>
+            Launch a coin <span aria-hidden="true">&#8599;</span>
           </a>
         </div>
         <aside className="hero-next">
-          <span className="label">Upcoming funded launch</span>
+          <span className="label">Launching next</span>
           {next ? (
             <>
               <h2>${next.symbol}</h2>
@@ -61,7 +60,7 @@ export function renderHomePage(store: ReturnType<typeof getStore>, input?: Catal
               <dd>{overview.live}</dd>
             </div>
             <div>
-              <dt>Scheduled plans</dt>
+              <dt>Launching</dt>
               <dd>{overview.scheduled}</dd>
             </div>
           </dl>
@@ -71,13 +70,13 @@ export function renderHomePage(store: ReturnType<typeof getStore>, input?: Catal
         <div className="launchpad-toolbar">
           <h2 id="tokens-title">Launches</h2>
           <div className="tabs" role="tablist" aria-label="Launch filters">
-            {["All", "Scheduled", "Live"].map((label, i) => (
+            {([["All", "all"], ["Launching", "scheduled"], ["Live", "live"]] as const).map(([label, filter], i) => (
               <a
-                href={catalogHref({filter:label.toLowerCase() as CatalogFilter,q:page.q})}
+                href={catalogHref({filter:filter as CatalogFilter,q:page.q})}
                 className="tab"
                 role="tab"
-                data-card-filter={label.toLowerCase()}
-                aria-selected={String(label.toLowerCase() === page.filter)}
+                data-card-filter={filter}
+                aria-selected={String(filter === page.filter)}
               >
                 {label}
               </a>
@@ -105,7 +104,7 @@ export function renderHomePage(store: ReturnType<typeof getStore>, input?: Catal
       <section className="launchpad-principles">
         <div>
           <b>01 / Set the time</b>
-          <p>Fund the launch before its published schedule.</p>
+          <p>No coins yet.</p>
         </div>
         <div>
           <b>02 / Publish the plan</b>
