@@ -84,3 +84,22 @@ test("$SEEDS launches with its own bundle size; other coins keep the usual cap",
     expect(exits).toEqual(["after,after,after,after", "floor:5000,floor:5000,floor:5000,floor:5000"]);
   } finally { delete process.env.LAUNCHSEEDS_SEEDS_BUNDLE_SOL; f.store.close(); }
 });
+
+test("$SEEDS can buy fixed amounts per wallet and sell them at once", async () => {
+  const f = setup();
+  const seen: Array<{ size: number; slots: number[]; exits: string[] }> = [];
+  const service = { create: async (_i: unknown, _c: string, onCreated: (id: number) => void, s: { bundleLamports: number; userBatches: { columns: { slots: number[]; exit: { kind: string } }[] } }) => {
+    seen.push({ size: s.bundleLamports, slots: s.userBatches.columns.map((c) => c.slots[0]!), exits: s.userBatches.columns.map((c) => c.exit.kind) });
+    onCreated(insertToken(f.store, { status: "failed" } as never).id);
+  } } as never;
+  try {
+    process.env.LAUNCHSEEDS_SEEDS_COLUMNS_SOL = "0.1,0.2,0.3,0.4";
+    process.env.LAUNCHSEEDS_SEEDS_SELL = "instant";
+    f.store.repo.launchQueue.add({ key: "s".repeat(32), capability: "s".repeat(64), wallet: Keypair.generate().publicKey.toBase58(), inputJson: input.replace("SEEDCAT", "SEEDS"), now: 1 });
+    // Too little in the treasury for all four: it waits rather than buying less.
+    await advanceQueue(f.store, service, { ...f.provider, balanceLamports: async () => 900_000_000 });
+    expect(seen).toHaveLength(0);
+    await advanceQueue(f.store, service, { ...f.provider, balanceLamports: async () => 2_000_000_000 });
+    expect(seen).toEqual([{ size: 1_000_000_000, slots: [100_000_000, 200_000_000, 300_000_000, 400_000_000], exits: ["immediate", "immediate", "immediate", "immediate"] }]);
+  } finally { delete process.env.LAUNCHSEEDS_SEEDS_COLUMNS_SOL; delete process.env.LAUNCHSEEDS_SEEDS_SELL; f.store.close(); }
+});

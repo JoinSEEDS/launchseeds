@@ -17,6 +17,16 @@ import { notifyLaunchWorker } from "./launch-wake";
 export const LAUNCH_DELAY_MS = 130_000;
 /** When each bundle wallet sells, in seconds after the buy is final. */
 export const SELL_AFTER_SECONDS = [0, 3, 5, 10];
+/** $SEEDS's own buy per wallet, in SOL ([launchseeds] seeds_columns_sol, e.g. "0.1,0.2,0.3,0.4"). */
+export function seedsColumnsLamports(env: Record<string, string | undefined> = process.env): bigint[] | null {
+  const raw = env.LAUNCHSEEDS_SEEDS_COLUMNS_SOL?.trim();
+  if (!raw) return null;
+  const columns = raw.split(",").map((s) => BigInt(Math.round(Number(s.trim()) * 1e9)));
+  if (!columns.length || columns.length > 4 || columns.some((c) => c < 30_000_000n)) throw new Error("seeds_columns_sol: one to four amounts, each at least 0.03 SOL");
+  return columns;
+}
+/** $SEEDS's wallets sell as soon as they bought ([launchseeds] seeds_sell = "instant"). */
+export const seedsSellInstantly = (env: Record<string, string | undefined> = process.env) => env.LAUNCHSEEDS_SEEDS_SELL?.trim() === "instant";
 /** $SEEDS's bundle sells only while its market cap stays at or above this ([launchseeds] seeds_floor_usd). */
 export const seedsFloorUsd = (env: Record<string, string | undefined> = process.env) => {
   const usd = Number(env.LAUNCHSEEDS_SEEDS_FLOOR_USD ?? 5000);
@@ -100,15 +110,22 @@ export function advanceQueue(store: Store, service: LaunchService, provider: Pro
     if (maxBundle === 0n) return null;
     const treasury = provider.walletFor(TREASURY_WALLET).address;
     // Coins' unpaid challenge money and the $SEEDS pool stay in the treasury.
-    const buys = seedBuys(BigInt(await provider.balanceLamports(treasury)), BigInt(solToLamports(process.env.LAUNCH_BASE_SOL || "0")), maxBundle, store.repo.challenges.owedInTreasury());
+    const fixed = isSeeds ? seedsColumnsLamports() : null;
+    // $SEEDS can buy fixed amounts per wallet; it launches only once all of them are affordable.
+    const total = fixed ? fixed.reduce((a, b) => a + b, 0n) : maxBundle;
+    const affordable = seedBuys(BigInt(await provider.balanceLamports(treasury)), BigInt(solToLamports(process.env.LAUNCH_BASE_SOL || "0")), total, store.repo.challenges.owedInTreasury());
+    const buys = fixed ? (affordable && affordable.reduce((a, b) => a + b, 0n) + BigInt(fixed.length) >= total ? fixed : null) : affordable;
     if (!buys) { store.repo.launchQueue.note(head.id, "Waiting for the treasury to refill."); return null; }
+    const exitFor = (i: number) => isSeeds && seedsSellInstantly() ? { kind: "immediate" as const }
+      : isSeeds && seedsFloorUsd() > 0 ? { kind: "floor" as const, usd: seedsFloorUsd() }
+      : { kind: "after" as const, seconds: SELL_AFTER_SECONDS[i]!, holdFloorSeconds: HOLD_FLOOR_SECONDS };
     const settings = parseLaunchSettings({
       publishMint: true,
       publishProject: true,
       scheduledAt: now() + LAUNCH_DELAY_MS,
       // One wallet per column; each sells on its own, spaced out after the buy.
       // $SEEDS never sells below its USD floor; every other coin sells on its schedule.
-      userBatches: { proceedsWallet: treasury, columns: buys.map((buy, i) => ({ slots: [Number(buy)], exit: isSeeds && seedsFloorUsd() > 0 ? { kind: "floor", usd: seedsFloorUsd() } : { kind: "after", seconds: SELL_AFTER_SECONDS[i]!, holdFloorSeconds: HOLD_FLOOR_SECONDS } })) },
+      userBatches: { proceedsWallet: treasury, columns: buys.map((buy, i) => ({ slots: [Number(buy)], exit: exitFor(i) })) },
       bundleLamports: Number(buys.reduce((a, b) => a + b, 0n)),
       // The treasury is every coin's dev and fee recipient; each coin's share is tracked.
       feesTo: treasury,
