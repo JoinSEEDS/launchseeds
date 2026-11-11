@@ -40,11 +40,11 @@ test("fees are recorded once per trade, oldest first, and resume after the last 
       return trade(c.fee, [Keypair.generate().publicKey.toBase58(), curve, vault], c.time);
     }) as never;
     expect(await syncCoinFees({ repo: store.repo, rpc, tokenId: token.id, mint, treasury })).toBe(2);
-    expect(store.repo.challenges.earned(token.id)).toBe(300n);
+    expect(store.repo.challenges.earned(token.id)).toBe(270n);
     visible = chain;
     expect(await syncCoinFees({ repo: store.repo, rpc, tokenId: token.id, mint, treasury })).toBe(1);
     expect(await syncCoinFees({ repo: store.repo, rpc, tokenId: token.id, mint, treasury })).toBe(0);
-    expect(store.repo.challenges.earned(token.id)).toBe(600n);
+    expect(store.repo.challenges.earned(token.id)).toBe(540n);
     expect(store.repo.challenges.latestFee(token.id)?.signature).toBe("s3");
   } finally {
     store.close();
@@ -59,7 +59,7 @@ test("a coin's balance: earned minus paid minus what open challenges and approve
     const wallet = Keypair.generate().publicKey.toBase58();
     const challenge = c.createChallenge({ tokenId: token.id, title: "Post a video", description: "", minRewardLamports: 50_000n, maxRewardLamports: 200_000n, maxWinners: 3, createdBy: wallet, now: 1 });
     // Open slots are held at the maximum reward.
-    expect(c.balance(token.id)).toEqual({ earned: 1_000_000n, paid: 0n, promised: 600_000n, available: 400_000n });
+    expect(c.balance(token.id)).toEqual({ earned: 900_000n, paid: 0n, promised: 600_000n, available: 300_000n });
     const s = c.createSubmission({ challengeId: challenge.id, tokenId: token.id, wallet, proofUrl: "https://x.com/a/status/1", requestedLamports: 180_000n, now: 2 });
     expect(c.submission(s.id)?.requestedLamports).toBe("180000");
     expect(c.moveSubmission(s.id, "pending", { status: "approved", awardedLamports: "120000", decidedAt: 3 })).toBe(true);
@@ -67,9 +67,9 @@ test("a coin's balance: earned minus paid minus what open challenges and approve
     // An approved completion holds its approved amount, not the maximum.
     expect(c.balance(token.id).promised).toBe(400_000n + 120_000n);
     expect(c.moveSubmission(s.id, "approved", { status: "paid", paidAt: 4 })).toBe(true);
-    expect(c.balance(token.id)).toEqual({ earned: 1_000_000n, paid: 120_000n, promised: 400_000n, available: 480_000n });
+    expect(c.balance(token.id)).toEqual({ earned: 900_000n, paid: 120_000n, promised: 400_000n, available: 380_000n });
     expect(c.closeChallenge(challenge.id, 5)).toBe(true);
-    expect(c.balance(token.id)).toEqual({ earned: 1_000_000n, paid: 120_000n, promised: 0n, available: 880_000n });
+    expect(c.balance(token.id)).toEqual({ earned: 900_000n, paid: 120_000n, promised: 0n, available: 780_000n });
     expect(c.owedAll()).toBe(880_000n);
   } finally {
     store.close();

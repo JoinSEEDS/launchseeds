@@ -1,3 +1,5 @@
+import { isSeedsSymbol, seedsMint } from "../../../src/domain/seeds-split";
+import { adminWallets } from "../../../src/server/admin-wallets";
 import { createHash } from "node:crypto";
 import { ApiError, apiJson, readBoundedJson, requireSameOrigin } from "../../../lib/api-security";
 import { IngressRateLimiter } from "../../../lib/trusted-client";
@@ -44,6 +46,9 @@ export async function POST(request: Request): Promise<Response> {
       nonce: text(body.nonce),
     };
     const signature = text(body.signature);
+    // $SEEDS is LaunchSeeds' own coin: only an admin launches it, and only once.
+    if (isSeedsSymbol(seed.symbol) && (!adminWallets().includes(seed.wallet) || seedsMint()))
+      throw new ApiError("That ticker is reserved.", 400);
     if (!signature || !/^[a-f0-9]{32}$/.test(seed.nonce) || Math.abs(Date.now() - seed.issuedAt) > MAX_AGE_MS)
       throw new ApiError("Sign a fresh launch request.", 400);
     if (!(await ed25519VoteVerifier.verify({ wallet: seed.wallet, signature, message: seedMessage(seed) })))
@@ -52,7 +57,7 @@ export async function POST(request: Request): Promise<Response> {
     const capability = createHash("sha256").update(signature).digest("hex");
 
     const store = getStore(), service = await getLaunchService(), now = Date.now();
-    const input = { name: seed.name, symbol: seed.symbol, description: seed.description, image: seed.image, website: seed.website, x: seed.x, telegram: seed.telegram, devBuySol: "0" };
+    const input = { name: seed.name, symbol: seed.symbol, description: seed.description, image: seed.image, website: "", x: seed.x, telegram: seed.telegram, devBuySol: "0" };
     const existing = store.repo.tokens.getByAccess(createHash("sha256").update(capability).digest("hex"));
     if (!existing) {
       const limited = seedLimit(store.repo.tokens.all(), seed.wallet, now, Number(process.env.LAUNCHSEEDS_DAILY_LAUNCHES || 20));

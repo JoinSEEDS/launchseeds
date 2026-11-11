@@ -17,6 +17,8 @@ export async function runCycle(input: {
   fees?: { sync(token: { id: number; mint: string }): Promise<number>; claim(): Promise<string> };
   /** Pays approved challenge completions from the treasury. */
   payouts?: { tick(): Promise<string[]> };
+  /** Runs an admin-authorized $SEEDS buyback and burn. */
+  seedsBurn?: { tick(): Promise<string[]> };
 }) {
   return measure("worker cycle", async () => {
     const errors: { tokenId: number; operation: string; error: string }[] = [];
@@ -48,6 +50,10 @@ export async function runCycle(input: {
     if (input.payouts)
       await attempt(0, "challenge payouts", async () => {
         for (const line of await input.payouts!.tick()) console.log(`Challenges: ${line}`);
+      });
+    if (input.seedsBurn)
+      await attempt(0, "seeds burn", async () => {
+        for (const line of await input.seedsBurn!.tick()) console.log(`$SEEDS: ${line}`);
       });
     if (input.bundles)
       await attempt(0, "launch bundles", async () => {

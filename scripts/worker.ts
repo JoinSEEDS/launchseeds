@@ -19,7 +19,9 @@ import { rpc as activityRpc } from "../src/server/coin-activity";
 import { creatorVault, syncCoinFees } from "../src/server/coin-fees";
 import { tickFeeClaim } from "../src/server/fee-claims";
 import { tickPayouts } from "../src/server/challenge-payouts";
-import { TREASURY_WALLET } from "../src/server/treasury";
+import { TREASURY_WALLET, treasuryBusy } from "../src/server/treasury";
+import { tickSeedsBurn } from "../src/server/seeds-burn";
+import { seedsBurnChain } from "../src/server/seeds-burn-chain";
 if (process.env.LAUNCHSEEDS_WORKER_ENABLED !== "true")
   throw new Error(
     "Workers are disabled. Configure and explicitly enable LAUNCHSEEDS_WORKER_ENABLED before running.",
@@ -179,6 +181,19 @@ try {
           }),
         };
       })() : undefined,
+      seedsBurn: launchProvider ? {
+        tick: async () => {
+          if (!store.repo.challenges.activeSeedsBurn()) return [];
+          feeSource ??= await SolardSource.createTrader(rpcUrl);
+          return tickSeedsBurn(store.repo, seedsBurnChain({
+            connection: launchProvider!.connection,
+            trader: feeSource.sdk as never,
+            treasury: launchProvider!.walletFor(TREASURY_WALLET).address,
+            walletName: TREASURY_WALLET,
+            busy: () => treasuryBusy(store.repo),
+          }));
+        },
+      } : undefined,
     });
     if (!fastLaunch)
       health.finishCycle(

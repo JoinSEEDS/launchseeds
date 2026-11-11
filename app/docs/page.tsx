@@ -56,7 +56,7 @@ export default function DocsPage() {
               <li><b>Launch time</b>: about two minutes after you sign.</li>
               <li><b>Launch buy</b>: the treasury buys in four wallets, up to 3 SOL in all.</li>
               <li><b>Sells</b>: the four wallets sell 0, 3, 5 and 10 seconds after their buys are final.</li>
-              <li><b>Fees</b>: the token’s creator fee goes to the treasury.</li>
+              <li><b>Fees</b>: the token’s creator fee goes to the treasury: 90% for its challenges, 10% to buy back and burn $SEEDS.</li>
               <li><b>Limit</b>: one launch per wallet a day.</li>
             </ul>
             <h3>Launch statuses</h3>
@@ -96,6 +96,7 @@ export default function DocsPage() {
             <p>Every token’s creator fee goes to one LaunchSeeds treasury wallet. Each token’s share is counted from its own trades, and only pays that token’s challenges.</p>
             <div className="table-wrap"><table><thead><tr><th scope="col">Item</th><th scope="col">Value</th></tr></thead><tbody>
               <tr><td>Fee to the treasury</td><td>The creator fee on every trade</td></tr>
+              <tr><td>$SEEDS share</td><td>10% of each token’s fees buys back and burns <a href="/seeds">$SEEDS</a>; the token keeps 90% for its challenges</td></tr>
               <tr><td>Treasury wallet</td><td>Shown on each token page</td></tr>
               <tr><td>Who pays</td><td>The treasury, as soon as the creator approves</td></tr>
               <tr><td>Left over when a challenge closes</td><td>Stays with the token for its next challenge</td></tr>

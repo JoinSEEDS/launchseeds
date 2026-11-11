@@ -26,8 +26,7 @@ export default function LaunchPage() {
             <div className="form-grid">
               <div className="field"><label htmlFor="f-name">Name</label><input id="f-name" maxLength={32} autoComplete="off" /></div>
               <div className="field"><label htmlFor="f-ticker">Ticker</label><input id="f-ticker" maxLength={13} autoComplete="off" autoCapitalize="off" /></div>
-              <div className="field span-all"><label htmlFor="f-desc">Description</label><textarea id="f-desc" rows={4} maxLength={4000}></textarea></div>
-              <div className="field"><label htmlFor="f-web">Website</label><input id="f-web" placeholder="https://" autoComplete="off" /></div>
+              <div className="field span-all"><label htmlFor="f-desc">Description</label><textarea id="f-desc" rows={4} maxLength={4000} placeholder="Who this coin rewards and for what: the cause, the community and the kind of challenges its fees will pay for"></textarea></div>
               <div className="field"><label htmlFor="f-x">X</label><input id="f-x" placeholder="@handle or link" autoComplete="off" /></div>
               <div className="field"><label htmlFor="f-tg">Telegram</label><input id="f-tg" placeholder="@handle or t.me link" autoComplete="off" /></div>
             </div>

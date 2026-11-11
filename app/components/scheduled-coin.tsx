@@ -5,6 +5,7 @@ import { SiteNav } from "./site-nav";
 import { StatusChip } from "./token-cards";
 import { adminWallets } from "../../src/server/admin-wallets";
 import { launchCountdown } from "../../lib/launch-countdown";
+import { seedsShareBps } from "../../src/domain/seeds-split";
 
 const ext = <svg style={{ width: "12px", height: "12px" }}><use href="#i-ext" /></svg>;
 
@@ -45,7 +46,7 @@ export function ScheduledCoin({ plan, marketCapUsd }: { plan: ScheduledLaunchVie
         <main className="token-layout container" id="challenges-root" data-mint={plan.mint!}>
           <section className="stats" aria-label="Coin and treasury numbers">
             <div className="stat"><span className="k">Market cap</span><span className="v">{marketCapUsd ? `$${Math.round(marketCapUsd).toLocaleString("en")}` : "Not observed"}</span><span className="s">{marketCapUsd ? "Last seen" : "No trades yet"}</span></div>
-            <div className="stat"><span className="k">Fees collected</span><span className="v"><span data-stat="earned">0.00</span> SOL</span><span className="s">All time, to treasury</span></div>
+            <div className="stat"><span className="k">Fees for challenges</span><span className="v"><span data-stat="earned">0.00</span> SOL</span><span className="s">{100 - seedsShareBps() / 100}% of trading fees</span></div>
             <div className="stat green"><span className="k">Treasury balance</span><span className="v"><span data-stat="available">0.00</span> SOL</span><span className="s">Free for new rewards</span></div>
             <div className="stat lav"><span className="k">Paid to participants</span><span className="v"><span data-stat="paid">0.00</span> SOL</span><span className="s" data-stat="paidsub">0 tasks</span></div>
             <div className="stat"><span className="k">Waiting for review</span><span className="v" data-stat="waiting">0</span><span className="s">Submitted tasks</span></div>

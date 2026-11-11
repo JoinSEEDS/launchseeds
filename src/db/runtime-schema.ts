@@ -91,6 +91,25 @@ export const runtimeSchemas = {
     createdAt: Time,
     updatedAt: Time,
   }),
+  /** An admin-authorized $SEEDS buyback and burn, paid from the $SEEDS share of
+   * coins' fees in the treasury. Each step is saved before it is sent. */
+  seedsBurns: z.object({
+    requestKey: z.string().length(64),
+    authorizedBy: Address,
+    mint: Address,
+    lamports: z.string().regex(/^\d+$/),
+    status: z.enum(["queued", "buying", "bought", "burning", "done", "review"]),
+    buySignature: z.string().nullable().default(null),
+    boughtRaw: z.string().nullable().default(null),
+    buySpentLamports: z.string().nullable().default(null),
+    burnJson: z.string().nullable().default(null),
+    burnSignature: z.string().nullable().default(null),
+    spentLamports: z.string().nullable().default(null),
+    error: z.string().nullable().default(null),
+    createdAt: Time,
+    updatedAt: Time,
+    doneAt: Time.nullable().default(null),
+  }),
   /** Every signed challenge action, by sha256 of its signature, so none runs twice. */
   signedActions: z.object({
     key: z.string().length(64),

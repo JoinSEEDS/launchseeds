@@ -27,7 +27,7 @@ export default function RootLayout({ children }: { children: any }) {
         <footer className="footer">
           <div className="container">
             <div className="footer-brand"><img src="/logo.png" alt="" width="32" height="32" /><div><b>{SITE_NAME}</b>A launchpad where trading rewards real-world action.</div></div>
-            <div className="footer-links"><a href="/#launches">Challenges</a><a href="/docs">Docs</a></div>
+            <div className="footer-links"><a href="/#launches">Challenges</a><a href="/seeds">$SEEDS</a><a href="/docs">Docs</a></div>
           </div>
         </footer>
       </body>

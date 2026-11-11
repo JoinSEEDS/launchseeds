@@ -1,10 +1,24 @@
 import type { SqlDb } from "./util";
+import { seedsCut, seedsMint, seedsShareBps } from "../../domain/seeds-split";
 
 const sum = (values: string[]) => values.reduce((total, v) => total + BigInt(v), 0n);
 const IN_FLIGHT = ["approved", "paying"] as const;
+const BURN_ACTIVE = ["queued", "buying", "bought", "burning", "review"] as const;
+export type SeedsSplit = { bps: () => number; mint: () => string | null };
+const envSplit: SeedsSplit = { bps: () => seedsShareBps(), mint: () => seedsMint() };
 
 /** Each coin's creator fees, its challenges and their completions. */
-export function challengesRepo(db: SqlDb) {
+export function challengesRepo(db: SqlDb, split: SeedsSplit = envSplit) {
+  const seedsTokenId = () => {
+    const mint = split.mint();
+    return mint ? (db.tokens.select().where({ mint }).get()?.id ?? null) : null;
+  };
+  /** Every coin's raw creator fees, by token id. */
+  const rawByToken = () => {
+    const out = new Map<number, bigint>();
+    for (const f of db.coinFees.select().all()) out.set(f.tokenId, (out.get(f.tokenId) ?? 0n) + BigInt(f.lamports));
+    return out;
+  };
   const repo = {
     /** Records one trade's creator fee once; false when already recorded. */
     recordFee(tokenId: number, signature: string, lamports: bigint, at: number) {
@@ -16,8 +30,15 @@ export function challengesRepo(db: SqlDb) {
     latestFee(tokenId: number) {
       return db.coinFees.select().where({ tokenId }).orderBy("at", "desc").orderBy("id", "desc").get() ?? null;
     },
-    earned(tokenId: number) {
+    /** All the creator fees a coin's trades paid. */
+    rawFees(tokenId: number) {
       return sum(db.coinFees.select().where({ tokenId }).all().map((f) => f.lamports));
+    },
+    /** What a coin keeps for its challenges: its fees less the $SEEDS share.
+     * $SEEDS itself keeps nothing for challenges; all of its fees are its pool. */
+    earned(tokenId: number) {
+      const raw = repo.rawFees(tokenId);
+      return tokenId === seedsTokenId() ? 0n : raw - seedsCut(raw, split.bps());
     },
     challenge(id: number) {
       return db.challenges.select().where({ id }).get() ?? null;
@@ -112,8 +133,53 @@ export function challengesRepo(db: SqlDb) {
       const earned = sum(db.coinFees.select().all().map((f) => f.lamports));
       const claimed = sum(db.feeClaims.select().where({ status: "confirmed" }).all().map((c) => c.lamports));
       const paid = sum(db.submissions.select().where({ status: "paid" }).all().map((s) => s.awardedLamports ?? "0"));
-      const held = (claimed < earned ? claimed : earned) - paid;
+      const burned = sum(db.seedsBurns.select().where({ status: "done" }).all().map((b) => b.spentLamports ?? b.lamports));
+      const held = (claimed < earned ? claimed : earned) - paid - burned;
       return held > 0n ? held : 0n;
+    },
+    /** The $SEEDS pool: its share of every coin's fees plus all of its own,
+     * what buybacks spent or hold, and what can be spent now (only SOL already
+     * claimed into the treasury and not owed to any coin's challenges). */
+    seedsPool() {
+      const bps = split.bps(), seedsId = seedsTokenId(), raw = rawByToken();
+      let accrued = 0n, total = 0n;
+      const contributions: { tokenId: number; feesLamports: bigint; seedsLamports: bigint }[] = [];
+      for (const [tokenId, fees] of raw) {
+        const cut = tokenId === seedsId ? fees : seedsCut(fees, bps);
+        accrued += cut; total += fees;
+        contributions.push({ tokenId, feesLamports: fees, seedsLamports: cut });
+      }
+      const burns = db.seedsBurns.select().all();
+      const spent = sum(burns.filter((b) => b.status === "done").map((b) => b.spentLamports ?? b.lamports));
+      const held = sum(burns.filter((b) => (BURN_ACTIVE as readonly string[]).includes(b.status)).map((b) => b.lamports));
+      const claimed = sum(db.feeClaims.select().where({ status: "confirmed" }).all().map((c) => c.lamports));
+      const inTreasury = (claimed < total ? claimed : total) - (total - accrued) - spent - held;
+      const left = accrued - spent - held;
+      const spendable = left < inTreasury ? left : inTreasury;
+      return { bps, accrued, spent, held, spendable: spendable > 0n ? spendable : 0n, contributions: contributions.sort((a, b) => (b.seedsLamports > a.seedsLamports ? 1 : -1)) };
+    },
+    seedsBurns() {
+      return db.seedsBurns.select().orderBy("id", "desc").all();
+    },
+    activeSeedsBurn() {
+      return db.seedsBurns.select().where({ status: { $in: ["queued", "buying", "bought", "burning"] } }).orderBy("id", "asc").get() ?? null;
+    },
+    /** Queues an authorized buyback if none is running and the pool covers it. */
+    queueSeedsBurn(input: { requestKey: string; authorizedBy: string; mint: string; lamports: bigint; now: number }) {
+      return db.transaction(() => {
+        const same = db.seedsBurns.select().where({ requestKey: input.requestKey }).get();
+        if (same) return { burn: same, error: null };
+        if (db.seedsBurns.select().where({ status: { $in: [...BURN_ACTIVE] } }).get()) return { burn: null, error: "A buyback is already running or waiting for review." };
+        if (input.lamports > repo.seedsPool().spendable) return { burn: null, error: "The $SEEDS pool does not cover that amount yet." };
+        return { burn: db.seedsBurns.insert({ requestKey: input.requestKey, authorizedBy: input.authorizedBy, mint: input.mint, lamports: input.lamports.toString(), status: "queued", createdAt: input.now, updatedAt: input.now }), error: null };
+      });
+    },
+    /** Moves a buyback from one step to the next; false if it was not at `from`. */
+    moveSeedsBurn(id: number, from: string, patch: Record<string, unknown> & { status: "queued" | "buying" | "bought" | "burning" | "done" | "review" }, now: number) {
+      return db.seedsBurns.select().where({ id, status: from as never }).updateAll({ ...patch, updatedAt: now } as never) > 0;
+    },
+    seedsBurn(id: number) {
+      return db.seedsBurns.select().where({ id }).get() ?? null;
     },
     /** SOL every coin can still claim: earned minus paid, across all coins. */
     owedAll() {

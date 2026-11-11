@@ -13,7 +13,7 @@ export default function mount() {
   if (!form) return;
   const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const image = get<HTMLInputElement>("f-image"), name = get<HTMLInputElement>("f-name"), ticker = get<HTMLInputElement>("f-ticker");
-  const description = get<HTMLTextAreaElement>("f-desc"), website = get<HTMLInputElement>("f-web"), x = get<HTMLInputElement>("f-x"), telegram = get<HTMLInputElement>("f-tg");
+  const description = get<HTMLTextAreaElement>("f-desc"), x = get<HTMLInputElement>("f-x"), telegram = get<HTMLInputElement>("f-tg");
   const submit = get<HTMLButtonElement>("seed-submit"), errorBox = get<HTMLElement>("seed-error"), bundle = get<HTMLElement>("seed-bundle");
   const upload = get<HTMLElement>("image-upload"), generate = get<HTMLButtonElement>("generate-image");
   let file: File | null = null, preview: string | null = null;
@@ -75,7 +75,7 @@ export default function mount() {
         symbol: normalizeTicker(symbol),
         description: description.value,
         image: picture,
-        website: website.value,
+        website: "",
         x: x.value,
         telegram: telegram.value,
         issuedAt: Date.now(),

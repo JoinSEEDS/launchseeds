@@ -14,6 +14,8 @@ export function launchCatalogRepo(db: SqlDb) {
       const live = op.eq(c.status, "live");
       const scheduled = op.and(op.isNotNull(scheduledAt), op.or(op.eq(c.status,"funding"),op.or(op.eq(c.status,"deploying"),op.eq(c.status,"failed"))));
       let condition = input.filter === "live" ? live : input.filter === "scheduled" ? scheduled : op.or(live,scheduled);
+      // $SEEDS has its own page, not a place in the launch list.
+      condition = op.and(condition,op.ne(f.upper(c.symbol),"SEEDS"));
       if (input.q) {
         // INSTR treats % and _ as literal characters, not wildcard operators.
         const term = input.q.replace(/[A-Z]/g, s=>s.toLowerCase());

@@ -9,6 +9,7 @@ import {
   type ChallengeClose, type ChallengePost, type Decision, type ReviewResolution, type SubmissionPost,
 } from "../../lib/challenge-message";
 import type { LaunchseedsRepo } from "../db/repo";
+import { seedsMint } from "../domain/seeds-split";
 import type { Token } from "../db/schema";
 
 export const MIN_REWARD_LAMPORTS = 1_000_000n; // 0.001 SOL
@@ -46,6 +47,7 @@ export async function postChallenge(repo: Repo, verify: Verify, token: Token | n
   const coin = liveCoin(token);
   creatorOnly(coin, r.wallet);
   if (r.mint !== coin.mint) throw new ApiError("Signed for another coin.", 400);
+  if (coin.mint === seedsMint()) throw new ApiError("$SEEDS has no challenges; its fees buy back and burn it.", 400);
   const title = r.title.trim(), description = r.description.trim();
   if (!title || title.length > 120 || description.length > 2000) throw new ApiError("Give the challenge a title up to 120 characters and a description up to 2,000.", 400);
   const min = lamports(r.minRewardLamports, "the minimum reward"), max = lamports(r.maxRewardLamports, "the maximum reward");
