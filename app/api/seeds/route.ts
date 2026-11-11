@@ -18,11 +18,13 @@ const MAX_AGE_MS = 5 * 60_000;
 /** The bundle sells once the coin exists; this leaves time to prepare it. */
 const LAUNCH_DELAY_MS = 130_000;
 const text = (value: unknown) => (typeof value === "string" ? value : "");
+/** When each bundle wallet sells, in seconds after the buy is final. */
+const SELL_AFTER_SECONDS = [0, 3, 5, 10];
 
 /** A free launch: a SeedRequest plus its `signature` (base58) over seedMessage,
  * which covers every field. The treasury pays for everything and is the coin's
- * dev and fee recipient; four wallets each buy in the launch bundle and all four
- * sell together as soon as the coin exists. The same signed request always
+ * dev and fee recipient; four wallets each buy in the launch bundle, then sell
+ * one at a time: at once, and 3, 5 and 10 seconds after their buys are final. The same signed request always
  * returns the same launch. */
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -78,7 +80,8 @@ export async function POST(request: Request): Promise<Response> {
         publishMint: true,
         publishProject: true,
         scheduledAt: now + LAUNCH_DELAY_MS,
-        userBatches: { proceedsWallet: treasury, columns: [{ slots: buys.map(Number), exit: { kind: "immediate" } }] },
+        // One wallet per column; each sells on its own, spaced out after the buy.
+        userBatches: { proceedsWallet: treasury, columns: buys.map((buy, i) => ({ slots: [Number(buy)], exit: { kind: "after", seconds: SELL_AFTER_SECONDS[i]! } })) },
         bundleLamports: Number(buys.reduce((a, b) => a + b, 0n)),
         // The treasury is every coin's dev and fee recipient; each coin's share is tracked.
         feesTo: treasury,

@@ -10,8 +10,9 @@ Free Pump.fun launches, paid for by the LaunchSeeds treasury.
 3. **Launch.** The treasury creates the coin in a Jito bundle with four wallets,
    each buying in its own transaction. Together they spend what the treasury
    holds above a small reserve.
-4. **Sell.** As soon as the coin exists, the four wallets sell together in one
-   transaction, and the SOL goes back to the treasury for the next launch.
+4. **Sell.** Once the buys are final, the wallets sell one at a time: the first
+   at once, the others 3, 5 and 10 seconds later. The SOL goes back to the
+   treasury for the next launch.
 
 One launch runs at a time. The coin's creator fees collect in its own wallet.
 

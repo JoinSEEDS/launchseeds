@@ -15,6 +15,8 @@ export const MAX_LAUNCH_BUY = 5_000_000_000n;
 const wallet = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
 export const BatchExitSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("immediate") }).strict(),
+  /** Sells this many seconds after its buy is final (0: at once). */
+  z.object({ kind: z.literal("after"), seconds: z.number().int().min(0).max(86_400) }).strict(),
   z.object({ kind: z.literal("time"), at: z.number().int().positive().safe() }).strict(),
   z.object({ kind: z.literal("profit"), profitBps: z.number().int().min(1).max(100_000) }).strict(),
   /** Sells everything together, as soon as that leaves the USD market cap at or above `usd`. */

@@ -34,6 +34,8 @@ export const UserBatchStateSchema = z.object({
   /** A ladder exit's next wallet, and the net SOL of the wallets already sold. */
   ladderIndex:z.number().int().nonnegative().default(0),
   ladderNet:amount.default("0"),
+  /** When the buy became final: an "after" sale counts its seconds from here. */
+  holdingSince:z.number().int().nonnegative().nullable().default(null),
 }).strict();
 export type UserBatchState = z.infer<typeof UserBatchStateSchema>;
 type Signed = z.infer<typeof signed>;
@@ -130,12 +132,13 @@ export class UserBatchEngine {
         }
         if(!fill)return "waiting for finalized launch fills";
         if(fill.fills.length!==state.buyers.length||fill.fills.some(amount=>amount<=0n)||fill.cost<=0n)return review("Invalid confirmed buy accounting");
-        save({status:"holding",fills:fill.fills.map(String),buyCostLamports:String(fill.cost)});
+        save({status:"holding",fills:fill.fills.map(String),buyCostLamports:String(fill.cost),holdingSince:this.now()});
         return "buy accounting confirmed";
       }
       case "holding": {
         const exit=state.forced?{kind:"immediate" as const}:state.config.exit;
         if(exit.kind==="time"&&this.now()<exit.at)return "waiting for scheduled sale";
+        if(exit.kind==="after"&&this.now()<(state.holdingSince??0)+exit.seconds*1000)return "waiting for scheduled sale";
         const floorUsd=exit.kind==="floor"||exit.kind==="ladder"?exit.usd:undefined;
         // Each floor sale is judged after the last one lands, not alongside it.
         if(floorUsd!==undefined&&this.repo.userBatches.byToken(row.tokenId).some(other=>other.id!==row.id&&UserBatchStateSchema.parse(JSON.parse(other.stateJson)).status==="exiting"))return "waiting for this coin's other sale";

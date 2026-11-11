@@ -115,3 +115,29 @@ test("a market-cap tranche waits for its level and is skipped past its window or
   await h.engine.tick();expect(h.read().status).toBe("skipped");expect(h.sent).toEqual([]);
  }finally{h.store.close();}
 });
+test("an 'after' column sells its seconds after the buy is final, not before", async () => {
+ const store = new Store(openLaunchseedsData(":memory:")), token = insertToken(store, { mint: "2".repeat(32) });
+ try {
+  let clock = 1_000_000;
+  const prepared: string[] = [];
+  const chain = {
+   sellFeeCap: 50000n, settlementFeeCap: 100000n,
+   fills: async () => ({ fills: [100n], cost: 250_000_000n }),
+   prepareSale: async (_s: unknown, minimum: bigint | null) => { expect(minimum).toBeNull(); prepared.push("sale"); return { transaction: "sale1", signature: "sale1", lastValidBlockHeight: 100 }; },
+   needsRefresh: async () => false, simulate: async () => null, send: async () => {}, status: async () => "unknown" as const, failedFee: async () => null,
+   absentAfterExpiry: async () => false, saleReceipt: async () => null, preparePayout: async () => ({ transaction: "p", signature: "p", lastValidBlockHeight: 100 }),
+   payoutReceipt: async () => null, marketCapUsd: async () => 0, prepareTrancheBuy: async () => ({ transaction: "b", signature: "b", lastValidBlockHeight: 100 }),
+  } as unknown as UserBatchChain;
+  const state = UserBatchStateSchema.parse({ version: 1, status: "buying", config: { slots: [250_000_000], exit: { kind: "after", seconds: 3 } }, proceedsWallet: "3".repeat(32), mint: token.mint, buyers: [{ name: "a", wallet: "4".repeat(32), budgetLamports: "250000000", batchIndex: 0, role: "signer" }] });
+  store.repo.userBatches.insert(token.id, 0, JSON.stringify(state), clock);
+  const engine = new UserBatchEngine(store.repo, chain, () => clock);
+  const read = () => UserBatchStateSchema.parse(JSON.parse(store.repo.userBatches.byToken(token.id)[0]!.stateJson));
+  await engine.tick();
+  expect(read().status).toBe("holding");
+  expect(read().holdingSince).toBe(1_000_000);
+  clock += 2_000; await engine.tick();
+  expect(prepared).toEqual([]);
+  clock += 1_000; await engine.tick();
+  expect(prepared).toEqual(["sale"]);
+ } finally { store.close(); }
+});

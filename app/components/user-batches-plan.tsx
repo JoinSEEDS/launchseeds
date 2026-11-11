@@ -53,9 +53,11 @@ function RunCard({ title, tag, rule, ruleTitle, trigger, run, wallets }: {
 type Exit = z.infer<typeof TrancheExitSchema>;
 const exitRule = (exit: Exit) =>
   exit.kind === "profit" ? `+${exit.profitBps / 100}%` : exit.kind === "time" ? utc(exit.at)
+    : exit.kind === "after" ? (exit.seconds ? `${exit.seconds}s after buy` : "Instant")
     : exit.kind === "floor" ? `mcap stays ≥ ${usd(exit.usd)}` : exit.kind === "ladder" ? `1 by 1, mcap ≥ ${usd(exit.usd)}` : "Instant";
 const exitTitle = (exit: Exit) =>
   exit.kind === "profit" ? "Sells at this net profit, after costs" : exit.kind === "time" ? "Sells at this time"
+    : exit.kind === "after" ? "Sells this many seconds after its buy is final"
     : exit.kind === "floor" ? "Sells all its wallets together once that leaves the market cap at or above this level"
     : exit.kind === "ladder" ? "Sells one wallet at a time, each only if that leaves the market cap at or above this level" : "Sells once its buys confirm";
 const triggerText = (trigger: TrancheTrigger) =>
