@@ -54,7 +54,7 @@ export default function mount() {
     if (!button || busy) return;
     button.textContent = address
       ? `${address.slice(0, 4)}…${address.slice(-4)}`
-      : "Connect Wallet";
+      : "Connect wallet";
     button.classList.toggle("is-connected", Boolean(address));
   };
   const unsubscribe = subscribeWallet(repaint);

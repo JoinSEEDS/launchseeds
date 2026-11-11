@@ -76,6 +76,8 @@ export async function submitCompletion(repo: Repo, verify: Verify, token: Token 
   const coin = liveCoin(token);
   const proofUrl = httpsUrl(r.proofUrl);
   const requested = lamports(r.requestedLamports, "the amount you ask for");
+  const note = (r.note ?? "").trim();
+  if (note.length > 500) throw new ApiError("Keep the note under 500 characters.", 400);
   const key = await checkSigned(repo, verify, r, signature, submissionMessage(r), now);
   return repo.tx((tx) => {
     if (!tx.challenges.useSignature(key, now)) throw new ApiError("This request was already used.", 409);
@@ -85,7 +87,7 @@ export async function submitCompletion(repo: Repo, verify: Verify, token: Token 
     if (requested < BigInt(challenge.minRewardLamports) || requested > BigInt(challenge.maxRewardLamports)) throw new ApiError("Ask for an amount inside the challenge's range.", 400);
     const mine = tx.challenges.submissionsByChallenge(challenge.id).filter((s) => s.wallet === r.wallet && s.status !== "rejected");
     if (mine.length) throw new ApiError("You already submitted to this challenge.", 409);
-    return tx.challenges.createSubmission({ challengeId: challenge.id, tokenId: coin.id, wallet: r.wallet, proofUrl, requestedLamports: requested, now });
+    return tx.challenges.createSubmission({ challengeId: challenge.id, tokenId: coin.id, wallet: r.wallet, proofUrl, note, requestedLamports: requested, now });
   });
 }
 

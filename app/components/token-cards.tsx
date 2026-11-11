@@ -1,3 +1,4 @@
+export type CardChallenge = { title: string; minRewardLamports: string; maxRewardLamports: string; maxWinners: number; paid: number; waiting: number; more: number };
 export type TokenCardData = {
   key: string;
   mint?: string | null;
@@ -12,84 +13,79 @@ export type TokenCardData = {
   target: number | null;
   profit: string | null;
   destination: string | null;
+  /** Live coins only: the newest open challenge and the coin's fee money. */
+  challenge?: CardChallenge | null;
+  earnedLamports?: string;
+  availableLamports?: string;
 };
+
+export const sol = (lamports: string | number | bigint) => (Number(lamports) / 1e9).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+export const solRange = (min: string, max: string) => (min === max ? sol(min) : `${sol(min)}–${sol(max)}`);
+export const utc = (at: number) => new Date(at).toISOString().slice(0, 16).replace("T", " ");
+
+const STATUS: Record<string, string> = { live: "Live", scheduled: "Scheduled", launching: "Launching", delayed: "Launching", awaiting_payment: "Scheduled", missed: "Missed", review: "In review", needs_review: "In review" };
+export function StatusChip({ status }: { status: string }) {
+  if (status === "live") return <span className="chip chip-live"><span className="dot"></span>Live</span>;
+  if (status === "missed" || status === "review" || status === "needs_review") return <span className="chip chip-review"><span className="dot"></span>{STATUS[status]}</span>;
+  return <span className="chip chip-outline">{STATUS[status] ?? "Scheduled"}</span>;
+}
+
+function ChallengeBox({ c, available }: { c: CardChallenge; available: string }) {
+  const pct = Math.min(100, Math.round((c.paid / c.maxWinners) * 100));
+  return (
+    <div className="challenge-box">
+      <div className="top">
+        <svg className="icon" style={{ color: "var(--green)" }}><use href="#i-leaf" /></svg>
+        <span className="label">{c.more ? `Active challenge · ${c.more + 1} open` : "Active challenge"}</span>
+        <span className="reward">{solRange(c.minRewardLamports, c.maxRewardLamports)} SOL / task</span>
+      </div>
+      <span className="name">{c.title}</span>
+      <div className="progress" role="progressbar" aria-label="Completions paid" aria-valuemin={0} aria-valuemax={c.maxWinners} aria-valuenow={c.paid}><span style={{ width: `${pct}%` }}></span></div>
+      <div className="meta"><span><b>{c.paid} / {c.maxWinners}</b> paid · {c.waiting} waiting</span><span>Treasury <b>{sol(available)} SOL</b></span></div>
+    </div>
+  );
+}
+
 export function TokenCards({ items }: { items: TokenCardData[] }) {
+  if (!items.length) return <div className="empty" style={{ gridColumn: "1/-1" }}>No launches match that search.</div>;
   return (
     <>
-      {items.length ? (
-        items.map((c) => (
-          <article className="launch-card" key={c.key}>
-            <a
-              className="launch-card__art"
-              href={c.href}
-              aria-label={`View ${c.name}`}
-            >
-              {c.image ? (
-                <img src={c.image} alt="" loading="lazy" />
-              ) : (
-                <span>{c.symbol.slice(0, 2)}</span>
-              )}
-              <span
-                className={`pill launch-card__status ${c.status === "live" ? "pill--active" : ""}`}
-              >
-                {c.status.replaceAll("_", " ")}
-              </span>
+      {items.map((c) => {
+        const live = c.status === "live";
+        return (
+          <article className="card token-card" key={c.key}>
+            <a className="art" href={c.href} aria-label={`View ${c.name}`}>
+              {c.image ? <img src={c.image} alt="" loading="lazy" /> : null}
+              <StatusChip status={c.status} />
             </a>
-            <div className="launch-card__body">
-              <a className="launch-card__title" href={c.href}>
-                <strong>${c.symbol}</strong>
-                <span>{c.name}</span>
-              </a>
-              {c.mint ? <p className="mono" style={{overflowWrap:"anywhere",fontSize:"11px"}}>CA: {c.mint}</p> : null}
+            <div className="body">
+              <div>
+                <div className="title-row"><h3>${c.symbol}</h3><span>{c.name}</span></div>
+                {c.mint ? <div className="ca" title={c.mint}>{c.mint}</div> : null}
+              </div>
+              {live ? (
+                c.challenge ? <ChallengeBox c={c.challenge} available={c.availableLamports ?? "0"} /> : (
+                  <div className="challenge-empty"><span className="label">No challenge yet</span><p>Fees collect for this coin until its creator posts one.</p></div>
+                )
+              ) : null}
               {c.scheduledAt ? (
-                <div className="card-schedule">
-                  <span className="label label--sm">Launch (UTC)</span>
-                  <time dateTime={new Date(c.scheduledAt).toISOString()}>
-                    {new Date(c.scheduledAt)
-                      .toISOString()
-                      .replace("T", " ")
-                      .replace(".000Z", " UTC")}
-                  </time>
+                <div className="sched">
+                  <svg className="icon" style={{ color: "var(--lav-ink-2)" }}><use href="#i-clock" /></svg>
+                  <span className="k">{live ? "Launched" : "Launch"}</span>
+                  <time className="v" dateTime={new Date(c.scheduledAt).toISOString()}>{utc(c.scheduledAt)} UTC</time>
                 </div>
               ) : null}
-              <dl className="card-metrics">
-                <div>
-                  <dt>Market cap</dt>
-                  <dd>{c.marketCap ?? "Not observed"}</dd>
-                </div>
-                <div>
-                </div>
-                <div>
-                  <dt>Sell target</dt>
-                  <dd>{c.target ? `+${c.target - 100}%` : "Not configured"}</dd>
-                </div>
-                <div>
-                  <dt>Realized profit</dt>
-                  <dd>
-                    {c.profit === null ? "Not realized" : `${c.profit} SOL`}
-                  </dd>
-                </div>
-              </dl>
-              {c.destination ? (
-                <p className="card-destination">
-                  Profits <b>{c.destination}</b>
-                </p>
+              {live ? (
+                <dl className="facts">
+                  <div><dt>Market cap</dt><dd className={c.marketCap ? "" : "unset"}>{c.marketCap ?? "Not observed"}</dd></div>
+                  <div><dt>Fees earned</dt><dd>{sol(c.earnedLamports ?? "0")} SOL</dd></div>
+                </dl>
               ) : null}
-              <a className="btn btn--block" href={c.href}>
-                {c.scheduledAt ? "View launch plan" : "View token"}
-              </a>
+              <a className="btn btn-soft" href={c.href}>{live ? "View coin & challenges" : "View launch"} <svg style={{ width: "14px", height: "14px" }}><use href="#i-arrow" /></svg></a>
             </div>
           </article>
-        ))
-      ) : (
-        <div className="panel panel__body launch-empty">
-          <h2>No matching launches</h2>
-          <p>No live tokens yet.</p>
-          <a className="btn btn--primary" href="/launch">
-            Launch a coin
-          </a>
-        </div>
-      )}
+        );
+      })}
     </>
   );
 }

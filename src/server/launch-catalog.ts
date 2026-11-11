@@ -50,9 +50,18 @@ export function launchCatalog(store: Store,input: CatalogInput=initial): Catalog
       return {key:plan?.planHash??String(raw.id),mint:plan?.mint??null,name:raw.name,symbol:raw.symbol,image:raw.image,href:plan?`/coin/${plan.mint??plan.planHash}`:"/",status:plan?.status??"needs_review",scheduledAt:settings.scheduledAt,createdAt:raw.createdAt,marketCap:null,target:null,profit:null,destination:"to the published wallet"};
     }
     const cap=raw.marketCapUsd?`$${Math.round(raw.marketCapUsd).toLocaleString("en")}`:null;
-    return {key:raw.mint!,mint:raw.mint,name:raw.name,symbol:raw.symbol,image:raw.image,href:`/coin/${encodeURIComponent(raw.mint!)}`,status:"live",scheduledAt:settings.scheduledAt,createdAt:raw.createdAt,marketCap:cap,target:null,profit:null,destination:null};
+    return {key:raw.mint!,mint:raw.mint,name:raw.name,symbol:raw.symbol,image:raw.image,href:`/coin/${encodeURIComponent(raw.mint!)}`,status:"live",scheduledAt:settings.scheduledAt,createdAt:raw.createdAt,marketCap:cap,target:null,profit:null,destination:null,...coinChallenge(store,raw.id)};
   });
   return {...page,items};
+}
+/** A live coin's newest open challenge and its money, for its card. Lamport strings. */
+function coinChallenge(store:Store,tokenId:number) {
+  const c=store.repo.challenges,balance=c.balance(tokenId);
+  const open=c.challengesByToken(tokenId).filter(ch=>ch.status==="open").sort((a,b)=>b.id-a.id);
+  const subs=c.submissionsByToken(tokenId),first=open[0];
+  const challenge=first?{title:first.title,minRewardLamports:first.minRewardLamports,maxRewardLamports:first.maxRewardLamports,maxWinners:first.maxWinners,
+    paid:subs.filter(s=>s.challengeId===first.id&&s.status==="paid").length,waiting:subs.filter(s=>s.challengeId===first.id&&s.status==="pending").length,more:open.length-1}:null;
+  return {challenge,earnedLamports:String(balance.earned),availableLamports:String(balance.available)};
 }
 export function catalogOverview(store:Store) {
   const query=catalogOptions(initial);

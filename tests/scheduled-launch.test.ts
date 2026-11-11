@@ -253,7 +253,7 @@ test("published cards render stored plans with no SSR network calls", async () =
       throw new Error("SSR network forbidden");
     }) as unknown as typeof fetch;
     const html = renderToString(renderHomePage(f.store));
-    expect(html).toContain("launch-card");
+    expect(html).toContain("token-card");
     expect(html).toContain("$CLOCK");
     // A scheduled coin links to its coin page, never a separate schedule page.
     expect(html).toMatch(/href="\/coin\/[1-9A-HJ-NP-Za-km-z]{32,44}"/);

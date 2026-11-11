@@ -70,6 +70,7 @@ export const runtimeSchemas = {
     tokenId: RowId,
     wallet: Address,
     proofUrl: z.string().min(1).max(300),
+    note: z.string().max(500).default(""),
     requestedLamports: z.string().regex(/^\d+$/),
     awardedLamports: z.string().regex(/^\d+$/).nullable().default(null),
     status: z.enum(["pending", "rejected", "approved", "paying", "paid", "review"]),

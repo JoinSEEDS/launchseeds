@@ -25,12 +25,13 @@ Challenge: ${r.challengeId}
 ${tail(r.issuedAt, r.nonce)}`;
 
 /** Anyone submits a completion, paid to the signing wallet, asking an amount in the range. */
-export type SubmissionPost = Signed & { challengeId: number; proofUrl: string; requestedLamports: string };
+export type SubmissionPost = Signed & { challengeId: number; proofUrl: string; requestedLamports: string; note?: string };
 export const submissionMessage = (r: SubmissionPost) =>
   `${head("submission", r.wallet, r.mint, r.issuedAt, r.nonce)}
 Challenge: ${r.challengeId}
 Asking: ${r.requestedLamports} lamports
 Proof: ${r.proofUrl}
+Note: ${digest([r.note ?? ""])}
 ${tail(r.issuedAt, r.nonce)}`;
 
 /** The coin's creator approves (with the amount paid) or rejects a submission. */

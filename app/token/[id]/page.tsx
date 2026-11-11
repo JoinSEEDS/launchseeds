@@ -1,4 +1,5 @@
 import { ScheduledCoin } from "../../components/scheduled-coin";
+import { SiteNav } from "../../components/site-nav";
 import { publicPlanForMint, publicScheduledPlan } from "../../../src/server/scheduled-launches";
 import { getStore } from "../../../src/server/runtime";
 
@@ -9,11 +10,13 @@ export default function TokenPage({ params }: { params: { id: string } }) {
   const byMint = store.repo.tokens.getByMint(params.id);
   const saved = byMint ? store.repo.scheduledPlans.byToken(byMint.id) : null;
   const plan = (saved ? publicScheduledPlan(store, saved.planHash) : null) ?? publicPlanForMint(store, params.id) ?? publicScheduledPlan(store, params.id);
-  if (plan) return <ScheduledCoin plan={plan} />;
+  if (plan) return <ScheduledCoin plan={plan} marketCapUsd={byMint?.marketCapUsd} />;
   return (
-    <main className="page">
-      <h1 className="page-title">Coin not found</h1>
-      <a href="/">Launchpad</a>
-    </main>
+    <>
+      <header className="sky-short"><SiteNav /></header>
+      <main className="token-layout container">
+        <div className="empty">Coin not found. <a href="/">Back to the launchpad</a></div>
+      </main>
+    </>
   );
 }

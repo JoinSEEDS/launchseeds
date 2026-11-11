@@ -48,8 +48,8 @@ export function challengesRepo(db: SqlDb) {
     payable() {
       return db.submissions.select().where({ status: { $in: [...IN_FLIGHT] } }).orderBy("id", "asc").all();
     },
-    createSubmission(input: { challengeId: number; tokenId: number; wallet: string; proofUrl: string; requestedLamports: bigint; now: number }) {
-      return db.submissions.insert({ challengeId: input.challengeId, tokenId: input.tokenId, wallet: input.wallet, proofUrl: input.proofUrl, requestedLamports: input.requestedLamports.toString(), status: "pending", createdAt: input.now });
+    createSubmission(input: { challengeId: number; tokenId: number; wallet: string; proofUrl: string; note?: string; requestedLamports: bigint; now: number }) {
+      return db.submissions.insert({ challengeId: input.challengeId, tokenId: input.tokenId, wallet: input.wallet, proofUrl: input.proofUrl, note: input.note ?? "", requestedLamports: input.requestedLamports.toString(), status: "pending", createdAt: input.now });
     },
     /** Moves a submission from one status to another; false if it was not in `from`. */
     moveSubmission(id: number, from: string, patch: { status: "rejected" | "approved" | "paying" | "paid" | "review"; awardedLamports?: string; payoutJson?: string | null; payoutSignature?: string | null; error?: string | null; decidedAt?: number; paidAt?: number }) {

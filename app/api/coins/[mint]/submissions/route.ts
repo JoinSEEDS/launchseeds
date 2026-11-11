@@ -19,7 +19,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ min
     const store = getStore(), token = store.repo.tokens.getByMint(mint);
     await submitCompletion(store.repo, ed25519VoteVerifier.verify.bind(ed25519VoteVerifier), token, {
       wallet: address.parse(body.wallet), mint, issuedAt: Number(body.issuedAt), nonce: text(body.nonce),
-      challengeId: Number(body.challengeId), proofUrl: text(body.proofUrl), requestedLamports: text(body.requestedLamports),
+      challengeId: Number(body.challengeId), proofUrl: text(body.proofUrl), requestedLamports: text(body.requestedLamports), note: text(body.note),
     }, text(body.signature));
     return apiJson(challengeView(store, token!.id));
   } catch (error) {

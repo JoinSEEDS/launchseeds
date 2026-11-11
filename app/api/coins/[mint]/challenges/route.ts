@@ -1,7 +1,8 @@
 import { ApiError, apiJson, readBoundedJson, requireSameOrigin } from "../../../../../lib/api-security";
 import { IngressRateLimiter } from "../../../../../lib/trusted-client";
 import { publicRouteError } from "../../../../../src/server/route-errors";
-import { getStore } from "../../../../../src/server/runtime";
+import { getLaunchProvider, getStore } from "../../../../../src/server/runtime";
+import { TREASURY_WALLET } from "../../../../../src/server/treasury";
 import { ed25519VoteVerifier } from "../../../../../src/integrations/ed25519";
 import { address } from "../../../../../src/shared/domain";
 import { challengeView } from "../../../../../src/server/challenge-view";
@@ -17,7 +18,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ min
   try {
     const token = coin((await params).mint);
     if (!token?.mint || token.status !== "live") throw new ApiError("Coin not found.", 404);
-    return apiJson(challengeView(getStore(), token.id), 200, { "cache-control": "no-store" });
+    let treasury: string | null = null;
+    try { treasury = (await getLaunchProvider())?.walletFor(TREASURY_WALLET).address ?? null; } catch {}
+    return apiJson({ ...challengeView(getStore(), token.id), treasury }, 200, { "cache-control": "no-store" });
   } catch (error) {
     return publicRouteError(error);
   }

@@ -6,66 +6,30 @@ export default function RootLayout({ children }: { children: any }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#090e15" />
-        <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1" />
+        <meta name="theme-color" content="#E8E1F3" />
+        <link rel="icon" type="image/png" href="/logo.png" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" />
         <title>{SITE_NAME}</title>
-        <meta
-          name="description"
-          content={`${SITE_NAME} · Free coin launches`}
-        />
+        <meta name="description" content="Launch coins free. Their trading fees pay the people who complete their challenges." />
       </head>
       <body>
-        <svg
-          width="0"
-          height="0"
-          style={{ position: "absolute" }}
-          aria-hidden="true"
-        >
-          <symbol id="i-pack" viewBox="0 0 24 24">
-            <rect x="6" y="3" width="12" height="18" rx="2" />
-            <path d="M6 7.5h12M6 16.5h12" />
-          </symbol>
-          <symbol id="i-stock" viewBox="0 0 24 24">
-            <path d="M4 19h16M5 15l4-4 3 3 7-7M15 7h4v4" />
-          </symbol>
-          <symbol id="i-burn" viewBox="0 0 24 24">
-            <path d="M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.4 1.2-3.8 2.5-5 .3 1.6 1 2.6 2 3 0-3-.5-5.5.5-8z" />
-          </symbol>
-          <symbol id="i-x" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="4" />
-            <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
-          </symbol>
-          <symbol id="i-github" viewBox="0 0 24 24">
-            <circle cx="6" cy="5" r="2" />
-            <circle cx="6" cy="19" r="2" />
-            <circle cx="18" cy="8" r="2" />
-            <path d="M6 7v10M18 10c0 4-6 3-12 7" />
-          </symbol>
-          <symbol id="i-wallet" viewBox="0 0 24 24">
-            <path d="M4 7a2 2 0 0 1 2-2h11v4" />
-            <rect x="3" y="9" width="18" height="11" rx="2" />
-            <path d="M16 14.5h2" />
-          </symbol>
+        <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
+          <symbol id="i-leaf" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14V7" /><path d="M8 8c0-3.5 2.5-5.5 6-5.5 0 3.5-2.5 5.5-6 5.5Z" /><path d="M8 10c0-2.5-2-4-5-4 0 2.5 2 4 5 4Z" /></g></symbol>
+          <symbol id="i-arrow" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10" /><path d="M9 4l4 4-4 4" /></g></symbol>
+          <symbol id="i-search" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></g></symbol>
+          <symbol id="i-clock" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" /></g></symbol>
+          <symbol id="i-back" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8H3" /><path d="M7 4 3 8l4 4" /></g></symbol>
+          <symbol id="i-ext" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 11l6-6" /><path d="M6 5h5v5" /></g></symbol>
         </svg>
-        <div className="wrap">
-          <header className="topbar">
-            <a className="brand" href="/">
-              {SITE_NAME.toUpperCase()}
-            </a>
-            <nav className="nav" aria-label="Main">
-              <a href="/">Launchpad</a>
-            </nav>
-            <div className="topbar__actions">
-              <button className="btn btn--wallet" type="button" data-wallet-btn>
-                Connect Wallet
-              </button>
-              <a className="btn btn--primary topbar__launch" href="/launch">
-                Launch
-              </a>
-            </div>
-          </header>
-          {children}
-        </div>
+        {children}
+        <footer className="footer">
+          <div className="container">
+            <div className="footer-brand"><img src="/logo.png" alt="" width="32" height="32" /><div><b>{SITE_NAME}</b>A launchpad where trading rewards real-world action.</div></div>
+            <div className="footer-links"><a href="/#launches">Challenges</a><a href="/docs">Docs</a></div>
+          </div>
+        </footer>
       </body>
     </html>
   );

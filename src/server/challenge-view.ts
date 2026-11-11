@@ -20,7 +20,7 @@ export function challengeView(store: Store, tokenId: number) {
         minRewardLamports: ch.minRewardLamports, maxRewardLamports: ch.maxRewardLamports, maxWinners: ch.maxWinners,
         winners: mine.filter((s) => !["pending", "rejected"].includes(s.status)).length,
         submissions: mine.map((s) => ({
-          id: s.id, wallet: s.wallet, proofUrl: s.proofUrl, status: s.status, createdAt: s.createdAt,
+          id: s.id, wallet: s.wallet, proofUrl: s.proofUrl, note: s.note ?? "", status: s.status, createdAt: s.createdAt,
           requestedLamports: s.requestedLamports, awardedLamports: s.awardedLamports, payoutSignature: s.status === "paid" || s.status === "review" ? s.payoutSignature : null,
         })),
       };
