@@ -1,11 +1,13 @@
 import { mountScheduledPlan } from "../../../lib/scheduled-plan-mount";
 import { mountAdminFinalize } from "../../../lib/admin-finalize";
 import { mountCoinActivity } from "../../../lib/coin-activity-mount";
+import { mountChallenges } from "../../../lib/challenges-mount";
 
 export default function mount() {
   const stopAdmin = mountAdminFinalize();
   if (!document.querySelector("[data-scheduled-plan]")) return stopAdmin;
   const stopPlan = mountScheduledPlan();
   const stopActivity = mountCoinActivity();
-  return () => { stopAdmin(); stopPlan?.(); stopActivity(); };
+  const stopChallenges = mountChallenges();
+  return () => { stopAdmin(); stopPlan?.(); stopActivity(); stopChallenges(); };
 }

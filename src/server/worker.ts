@@ -15,6 +15,8 @@ export async function runCycle(input: {
   bundles?: { tick(): Promise<string[]> };
   /** Each live coin's creator fees, and claiming the treasury's vault. */
   fees?: { sync(token: { id: number; mint: string }): Promise<number>; claim(): Promise<string> };
+  /** Pays approved challenge completions from the treasury. */
+  payouts?: { tick(): Promise<string[]> };
 }) {
   return measure("worker cycle", async () => {
     const errors: { tokenId: number; operation: string; error: string }[] = [];
@@ -43,6 +45,10 @@ export async function runCycle(input: {
         if (line !== "nothing to claim") console.log(`Fees: ${line}`);
       });
     }
+    if (input.payouts)
+      await attempt(0, "challenge payouts", async () => {
+        for (const line of await input.payouts!.tick()) console.log(`Challenges: ${line}`);
+      });
     if (input.bundles)
       await attempt(0, "launch bundles", async () => {
         for (const line of await input.bundles!.tick())

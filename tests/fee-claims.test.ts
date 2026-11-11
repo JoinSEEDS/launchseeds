@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { openLaunchseedsData } from "../src/db";
 import { Store } from "../src/server/store";
 import { CLAIM_MIN_LAMPORTS, tickFeeClaim, unclaimed, VAULT_RENT_LAMPORTS } from "../src/server/fee-claims";
-import { treasuryOwed } from "../src/server/treasury";
 
 test("the vault is claimed only once it holds enough above its rent", async () => {
   const store = new Store(openLaunchseedsData(":memory:"));
@@ -38,9 +37,21 @@ test("an unfinished claim resumes under the same id instead of starting another"
   }
 });
 
-test("money owed to coins counts only what has reached the treasury", () => {
+test("the vault keeps its rent; only the rest can be claimed", () => {
   expect(unclaimed(VAULT_RENT_LAMPORTS - 1n)).toBe(0n);
   expect(unclaimed(VAULT_RENT_LAMPORTS + 5n)).toBe(5n);
-  expect(treasuryOwed(1_000n, 300n)).toBe(700n);
-  expect(treasuryOwed(1_000n, 5_000n)).toBe(0n);
+});
+
+test("bundles leave alone the coins' SOL that was claimed into the treasury and not yet paid", async () => {
+  const store = new Store(openLaunchseedsData(":memory:"));
+  try {
+    const c = store.repo.challenges;
+    c.recordFee(1, "a", 300_000_000n, 1);
+    expect(c.owedInTreasury()).toBe(0n); // still in the vault
+    c.startClaim("claim-1", 2);
+    c.finishClaim("claim-1", { status: "confirmed", lamports: "500000000" }, 3);
+    expect(c.owedInTreasury()).toBe(300_000_000n); // never more than the coins earned
+  } finally {
+    store.close();
+  }
 });

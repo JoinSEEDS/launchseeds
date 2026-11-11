@@ -18,11 +18,14 @@ export type FeeTransaction = {
 };
 
 /** The coin's creator fee in one transaction: the vault's increase, when the
- * transaction trades on the coin's curve. Null when it is not such a trade. */
-export function feeFromTransaction(tx: FeeTransaction, vault: string, curve: string): bigint | null {
+ * transaction trades on the coin's curve. Null when it is not such a trade.
+ * "ambiguous" when the transaction also touches another of the treasury's coins
+ * (one vault increase can't be split between them): it is credited to no coin. */
+export function feeFromTransaction(tx: FeeTransaction, vault: string, curve: string, otherCurves: ReadonlySet<string> = new Set()): bigint | null | "ambiguous" {
   if (!tx.meta || tx.meta.err) return null;
   const keys = tx.transaction.message.accountKeys.map((k) => (typeof k === "string" ? k : k.pubkey));
   if (!keys.includes(curve)) return null;
+  if (keys.some((k) => k !== curve && otherCurves.has(k))) return "ambiguous";
   const i = keys.indexOf(vault);
   if (i < 0) return null;
   const delta = BigInt(tx.meta.postBalances[i]!) - BigInt(tx.meta.preBalances[i]!);
@@ -41,25 +44,32 @@ export async function syncCoinFees(input: {
   tokenId: number;
   mint: string;
   treasury: string;
+  /** The treasury's other coins' mints: a trade touching two of them is credited to neither. */
+  otherMints?: string[];
   maxTransactions?: number;
 }) {
   const curve = bondingCurve(input.mint), vault = creatorVault(input.treasury);
+  const otherCurves = new Set((input.otherMints ?? []).filter((m) => m !== input.mint).map(bondingCurve));
   const until = input.repo.challenges.latestFee(input.tokenId)?.signature;
   const fresh: Signature[] = [];
   let before: string | undefined;
+  let complete = false;
   for (let page = 0; page < 20; page++) {
     const batch = await input.rpc<Signature[]>("getSignaturesForAddress", [curve, { limit: 1000, commitment: "finalized", ...(until ? { until } : {}), ...(before ? { before } : {}) }]);
     fresh.push(...batch);
-    if (batch.length < 1000) break;
+    if (batch.length < 1000) { complete = true; break; }
     before = batch.at(-1)!.signature;
   }
+  // Never move past history that wasn't read: stop until an operator catches it up.
+  if (!complete) throw new Error("More than 20,000 unread trades; fee tracking paused for this coin");
   let recorded = 0;
   for (const s of fresh.reverse().filter((s) => !s.err).slice(0, input.maxTransactions ?? 100)) {
     const tx = await input.rpc<FeeTransaction | null>("getTransaction", [s.signature, { encoding: "jsonParsed", commitment: "finalized", maxSupportedTransactionVersion: 1 }]);
     if (!tx) break; // not served yet: retry from here next cycle
-    const fee = feeFromTransaction(tx, vault, curve);
-    // A trade without a fee still advances the cursor, recorded as zero.
-    if (input.repo.challenges.recordFee(input.tokenId, s.signature, fee ?? 0n, (tx.blockTime ?? s.blockTime ?? 0) * 1000)) recorded++;
+    const fee = feeFromTransaction(tx, vault, curve, otherCurves);
+    // A trade without a fee, or a shared one, still advances the cursor, recorded as zero.
+    if (fee === "ambiguous") console.warn(`Coin fees: ${s.signature} touches several of the treasury's coins; not credited`);
+    if (input.repo.challenges.recordFee(input.tokenId, s.signature, typeof fee === "bigint" ? fee : 0n, (tx.blockTime ?? s.blockTime ?? 0) * 1000)) recorded++;
   }
   return recorded;
 }

@@ -46,6 +46,8 @@ export function ScheduledCoin({ plan }: { plan: ScheduledLaunchView }) {
         </section>
       )}
 
+      {live ? <div className="stack" id="challenges-root" data-mint={plan.mint!}></div> : null}
+
       <div id="scheduled-plan-root"><ScheduledPlan plan={plan} /></div>
 
       {plan.description ? (

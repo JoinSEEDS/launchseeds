@@ -24,5 +24,8 @@ export const INDEXES = [
   "CREATE INDEX IF NOT EXISTS challenges_token ON challenges(tokenId, status)",
   "CREATE INDEX IF NOT EXISTS submissions_challenge ON submissions(challengeId, status)",
   "CREATE INDEX IF NOT EXISTS submissions_status ON submissions(status)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS signed_actions_key ON signedActions(key)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS payout_attempts_signature ON payoutAttempts(signature)",
+  "CREATE INDEX IF NOT EXISTS payout_attempts_submission ON payoutAttempts(submissionId)",
   "CREATE UNIQUE INDEX IF NOT EXISTS submissions_one_open ON submissions(challengeId, wallet) WHERE status IN ('pending','approved','paying','paid')",
 ] as const;

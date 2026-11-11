@@ -46,19 +46,23 @@ export const runtimeSchemas = {
     createdAt: Time,
     updatedAt: Time,
   }),
-  /** A coin creator's challenge: up to `maxWinners` completions each paid `rewardLamports`. */
+  /** A coin creator's challenge: up to `maxWinners` completions, each paid an
+   * amount the creator decides between `minRewardLamports` and `maxRewardLamports`. */
   challenges: z.object({
     tokenId: RowId,
     title: z.string().min(1).max(120),
     description: z.string().max(2000).default(""),
-    rewardLamports: z.string().regex(/^\d+$/),
+    minRewardLamports: z.string().regex(/^\d+$/),
+    maxRewardLamports: z.string().regex(/^\d+$/),
     maxWinners: z.number().int().min(1).max(100).default(1),
     status: z.enum(["open", "closed"]),
     createdBy: Address,
     createdAt: Time,
     closedAt: Time.nullable().default(null),
   }),
-  /** Someone's completion of a challenge. An approved one is paid from the treasury:
+  /** Someone's completion of a challenge, with the amount they asked for
+   * (`requestedLamports`, within the challenge's range). The creator approves it
+   * with the amount actually paid (`awardedLamports`). An approved one is paid from the treasury:
    * the signed transfer is saved before it is sent (`payoutJson`), never rebuilt
    * while it may still land. */
   submissions: z.object({
@@ -66,6 +70,8 @@ export const runtimeSchemas = {
     tokenId: RowId,
     wallet: Address,
     proofUrl: z.string().min(1).max(300),
+    requestedLamports: z.string().regex(/^\d+$/),
+    awardedLamports: z.string().regex(/^\d+$/).nullable().default(null),
     status: z.enum(["pending", "rejected", "approved", "paying", "paid", "review"]),
     payoutJson: z.string().nullable().default(null),
     payoutSignature: z.string().nullable().default(null),
@@ -73,6 +79,21 @@ export const runtimeSchemas = {
     createdAt: Time,
     decidedAt: Time.nullable().default(null),
     paidAt: Time.nullable().default(null),
+  }),
+  /** Every payout transfer ever signed for a submission, kept for good. */
+  payoutAttempts: z.object({
+    submissionId: RowId,
+    signature: z.string().min(1),
+    transactionJson: z.string(),
+    lastValidBlockHeight: z.number().int().nonnegative(),
+    status: z.enum(["sent", "landed", "failed", "unresolved"]),
+    createdAt: Time,
+    updatedAt: Time,
+  }),
+  /** Every signed challenge action, by sha256 of its signature, so none runs twice. */
+  signedActions: z.object({
+    key: z.string().length(64),
+    at: Time,
   }),
   /** Single-row liveness record for the one launch worker. */
   workerHealth: z.object({

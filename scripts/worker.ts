@@ -18,6 +18,7 @@ import { solToLamports } from "../src/shared/domain";
 import { rpc as activityRpc } from "../src/server/coin-activity";
 import { creatorVault, syncCoinFees } from "../src/server/coin-fees";
 import { tickFeeClaim } from "../src/server/fee-claims";
+import { tickPayouts } from "../src/server/challenge-payouts";
 import { TREASURY_WALLET } from "../src/server/treasury";
 if (process.env.LAUNCHSEEDS_WORKER_ENABLED !== "true")
   throw new Error(
@@ -142,7 +143,10 @@ try {
         const provider = launchProvider!;
         const treasury = provider.walletFor(TREASURY_WALLET).address;
         return {
-          sync: (token: { id: number; mint: string }) => syncCoinFees({ repo: store.repo, rpc: activityRpc, tokenId: token.id, mint: token.mint, treasury }),
+          sync: (token: { id: number; mint: string }) => syncCoinFees({
+            repo: store.repo, rpc: activityRpc, tokenId: token.id, mint: token.mint, treasury,
+            otherMints: store.repo.tokens.byFundingWalletName(TREASURY_WALLET).flatMap((t) => (t.mint ? [t.mint] : [])),
+          }),
           claim: () => tickFeeClaim(store.repo, {
             vaultLamports: async () => BigInt(await provider.balanceLamports(creatorVault(treasury))),
             claim: async (id) => {
@@ -154,6 +158,24 @@ try {
               const paid = result.payouts.find((p: { address: string }) => p.address === treasury);
               return { signature: result.signature, lamports: paid ? BigInt(paid.amountRaw) : 0n };
             },
+          }),
+        };
+      })() : undefined,
+      payouts: launchProvider ? (() => {
+        const provider = launchProvider!, connection = provider.connection;
+        const treasury = provider.walletFor(TREASURY_WALLET).address;
+        return {
+          tick: () => tickPayouts(store.repo, {
+            treasuryLamports: async () => BigInt(await provider.balanceLamports(treasury)),
+            prepare: (to, lamports) => provider.prepareSolTransfer(TREASURY_WALLET, to, Number(lamports)),
+            send: async (transaction) => { await connection.sendRawTransaction(Buffer.from(transaction, "base64"), { skipPreflight: false, maxRetries: 3 }); },
+            status: async (signature) => {
+              const s = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
+              if (!s) return "unknown";
+              if (s.err) return "failed";
+              return s.confirmationStatus === "finalized" ? "finalized" : s.confirmationStatus === "confirmed" ? "confirmed" : "pending";
+            },
+            expired: async (height) => (await connection.getBlockHeight("finalized")) > height,
           }),
         };
       })() : undefined,

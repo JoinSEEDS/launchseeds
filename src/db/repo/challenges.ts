@@ -25,9 +25,10 @@ export function challengesRepo(db: SqlDb) {
     challengesByToken(tokenId: number) {
       return db.challenges.select().where({ tokenId }).orderBy("id", "desc").all();
     },
-    createChallenge(input: { tokenId: number; title: string; description: string; rewardLamports: bigint; maxWinners: number; createdBy: string; now: number }) {
+    createChallenge(input: { tokenId: number; title: string; description: string; minRewardLamports: bigint; maxRewardLamports: bigint; maxWinners: number; createdBy: string; now: number }) {
       return db.challenges.insert({
-        tokenId: input.tokenId, title: input.title, description: input.description, rewardLamports: input.rewardLamports.toString(),
+        tokenId: input.tokenId, title: input.title, description: input.description,
+        minRewardLamports: input.minRewardLamports.toString(), maxRewardLamports: input.maxRewardLamports.toString(),
         maxWinners: input.maxWinners, status: "open", createdBy: input.createdBy, createdAt: input.now,
       });
     },
@@ -47,35 +48,54 @@ export function challengesRepo(db: SqlDb) {
     payable() {
       return db.submissions.select().where({ status: { $in: [...IN_FLIGHT] } }).orderBy("id", "asc").all();
     },
-    createSubmission(input: { challengeId: number; tokenId: number; wallet: string; proofUrl: string; now: number }) {
-      return db.submissions.insert({ challengeId: input.challengeId, tokenId: input.tokenId, wallet: input.wallet, proofUrl: input.proofUrl, status: "pending", createdAt: input.now });
+    createSubmission(input: { challengeId: number; tokenId: number; wallet: string; proofUrl: string; requestedLamports: bigint; now: number }) {
+      return db.submissions.insert({ challengeId: input.challengeId, tokenId: input.tokenId, wallet: input.wallet, proofUrl: input.proofUrl, requestedLamports: input.requestedLamports.toString(), status: "pending", createdAt: input.now });
     },
     /** Moves a submission from one status to another; false if it was not in `from`. */
-    moveSubmission(id: number, from: string, patch: { status: "rejected" | "approved" | "paying" | "paid" | "review"; payoutJson?: string | null; payoutSignature?: string | null; error?: string | null; decidedAt?: number; paidAt?: number }) {
+    moveSubmission(id: number, from: string, patch: { status: "rejected" | "approved" | "paying" | "paid" | "review"; awardedLamports?: string; payoutJson?: string | null; payoutSignature?: string | null; error?: string | null; decidedAt?: number; paidAt?: number }) {
       return db.submissions.select().where({ id, status: from as never }).updateAll(patch as never) > 0;
     },
     /** A coin's challenge money: what it earned, paid out, has promised (open
-     * challenges' remaining winners and approved, unpaid completions), and can
-     * still promise. */
+     * challenges' remaining winners at their maximum, and approved, unpaid
+     * completions at their approved amount), and can still promise. */
     balance(tokenId: number) {
       const earned = repo.earned(tokenId);
       const challenges = repo.challengesByToken(tokenId);
-      const reward = new Map(challenges.map((c) => [c.id, BigInt(c.rewardLamports)]));
-      const subs = repo.submissionsByToken(tokenId);
       let paid = 0n, inFlight = 0n;
       const used = new Map<number, number>();
-      for (const s of subs) {
-        const r = reward.get(s.challengeId) ?? 0n;
-        if (s.status === "paid") paid += r;
-        if (s.status === "approved" || s.status === "paying" || s.status === "review") inFlight += r;
-        if (s.status === "paid" || s.status === "approved" || s.status === "paying" || s.status === "review") used.set(s.challengeId, (used.get(s.challengeId) ?? 0) + 1);
+      for (const s of repo.submissionsByToken(tokenId)) {
+        const awarded = BigInt(s.awardedLamports ?? "0");
+        if (s.status === "paid") paid += awarded;
+        if (s.status === "approved" || s.status === "paying" || s.status === "review") inFlight += awarded;
+        if (s.status !== "pending" && s.status !== "rejected") used.set(s.challengeId, (used.get(s.challengeId) ?? 0) + 1);
       }
       let open = 0n;
       for (const c of challenges)
-        if (c.status === "open") open += BigInt(Math.max(0, c.maxWinners - (used.get(c.id) ?? 0))) * BigInt(c.rewardLamports);
+        if (c.status === "open") open += BigInt(Math.max(0, c.maxWinners - (used.get(c.id) ?? 0))) * BigInt(c.maxRewardLamports);
       const promised = inFlight + open;
       const available = earned - paid - promised;
       return { earned, paid, promised, available: available > 0n ? available : 0n };
+    },
+    /** Saves a signed payout transfer as a permanent attempt and moves the
+     * submission to paying, together; false if it was no longer approved. */
+    startPayout(id: number, signed: { transaction: string; signature: string; lastValidBlockHeight: number }, now: number) {
+      return db.transaction(() => {
+        if (!(db.submissions.select().where({ id, status: "approved" }).updateAll({ status: "paying", payoutJson: JSON.stringify(signed), payoutSignature: signed.signature, error: null }) > 0)) return false;
+        db.payoutAttempts.insert({ submissionId: id, signature: signed.signature, transactionJson: JSON.stringify(signed), lastValidBlockHeight: signed.lastValidBlockHeight, status: "sent", createdAt: now, updatedAt: now });
+        return true;
+      });
+    },
+    markAttempt(signature: string, status: "landed" | "failed" | "unresolved", now: number) {
+      return db.payoutAttempts.select().where({ signature }).updateAll({ status, updatedAt: now }) > 0;
+    },
+    payoutAttempts(submissionId: number) {
+      return db.payoutAttempts.select().where({ submissionId }).orderBy("id", "asc").all();
+    },
+    /** Records a signed action once; false when that signature was used before. */
+    useSignature(key: string, now: number) {
+      if (db.signedActions.select().where({ key }).get()) return false;
+      db.signedActions.insert({ key, at: now });
+      return true;
     },
     pendingClaim() {
       return db.feeClaims.select().where({ status: "pending" }).orderBy("id", "asc").get() ?? null;
@@ -86,11 +106,19 @@ export function challengesRepo(db: SqlDb) {
     finishClaim(claimId: string, patch: { status: "pending" | "confirmed" | "failed"; signature?: string; lamports?: string; error?: string | null }, now: number) {
       return db.feeClaims.select().where({ claimId }).updateAll({ ...patch, updatedAt: now }) > 0;
     },
+    /** Coins' challenge SOL that is in the treasury now: fees claimed into it
+     * (never more than the coins earned) minus what was paid out. Bundles leave it alone. */
+    owedInTreasury() {
+      const earned = sum(db.coinFees.select().all().map((f) => f.lamports));
+      const claimed = sum(db.feeClaims.select().where({ status: "confirmed" }).all().map((c) => c.lamports));
+      const paid = sum(db.submissions.select().where({ status: "paid" }).all().map((s) => s.awardedLamports ?? "0"));
+      const held = (claimed < earned ? claimed : earned) - paid;
+      return held > 0n ? held : 0n;
+    },
     /** SOL every coin can still claim: earned minus paid, across all coins. */
     owedAll() {
       const earned = sum(db.coinFees.select().all().map((f) => f.lamports));
-      const rewards = new Map(db.challenges.select().all().map((c) => [c.id, BigInt(c.rewardLamports)]));
-      const paid = db.submissions.select().where({ status: "paid" }).all().reduce((t, s) => t + (rewards.get(s.challengeId) ?? 0n), 0n);
+      const paid = sum(db.submissions.select().where({ status: "paid" }).all().map((s) => s.awardedLamports ?? "0"));
       return earned > paid ? earned - paid : 0n;
     },
   };
