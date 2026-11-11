@@ -10,6 +10,7 @@ import { simulateRaw } from "./launch-bundle-solard";
 import { BUYER_RESERVE_LAMPORTS, parseBundleIntent, V1_PACKET_LIMIT } from "./launch-bundle";
 import { rpcFetch } from "./rpc-pacing";
 import { loadWireTransaction } from "./solard-sdk";
+import { pairedSaleMinimum, pairedSellInstructions } from "./pair-sale";
 
 type Receipt = {
   transaction:{signatures:string[];message:{accountKeys:string[]}};
@@ -150,7 +151,8 @@ export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,load
       const plugin=new PumpPlugin(),seller=sellers[0]!.wallet,mint=new PublicKey(state.mint);
       const context={connection:ctx.connection,token:await loadToken(state.mint),user:new PublicKey(seller)};
       const market=await plugin.resolveMarket(context);
-      if(!market||market.quoteAsset.kind!=="native-sol")throw Error("Batch requires a native SOL Pump market");
+      if(!market)throw Error("Batch requires a Pump market");
+      const paired=market.quoteAsset.kind!=="native-sol"?(market.quoteAsset as unknown as {mint:PublicKey;tokenProgram:PublicKey}):null;
       const metadata=await getMint(ctx.connection,mint,"confirmed",market.baseTokenProgram);
       const sellerAccount=getAssociatedTokenAddressSync(mint,new PublicKey(seller),false,market.baseTokenProgram);
       const instructions:TransactionInstruction[]=[];
@@ -169,6 +171,25 @@ export function createUserBatchChain(ctx:BundleContext,repo:LaunchseedsRepo,load
         if(buyer.wallet!==seller&&fill>0n)instructions.push(createTransferCheckedInstruction(getAssociatedTokenAddressSync(mint,new PublicKey(buyer.wallet),false,market.baseTokenProgram),mint,sellerAccount,new PublicKey(buyer.wallet),fill,metadata.decimals,[],market.baseTokenProgram));
       }
       if(total===0n)throw Error("Nothing left to sell in this column");
+      // A coin paired with a pump coin sells coin -> pair -> SOL in one swap.
+      if(paired){
+        const reserves=market.metadata?.curve??market.metadata?.reserves;
+        if(!reserves)throw Error("Paired sale needs the market's reserves");
+        const pump=await import("@pump-fun/pump-sdk");
+        const pairCurve=await new pump.OnlinePumpSdk(ctx.connection).fetchBondingCurve(paired.mint);
+        if(pairCurve.complete)throw Error("The pair coin has left its curve; pool routes are not supported yet");
+        const minimum=pairedSaleMinimum({
+          coin:{...reserves,supply:metadata.supply},
+          pair:{virtualSol:BigInt(pairCurve.virtualQuoteReserves.toString()),virtualToken:BigInt(pairCurve.virtualTokenReserves.toString())},
+          sellRaw:total,requiredLamports:requiredOutput,
+          ...(floorUsd!==undefined?{floorUsd,solUsd:await solUsd()}:{}),
+          ...(afterBundleRaw!==undefined?{afterBundleRaw}:{}),
+        });
+        if(minimum===null)throw Error("This sale is too large to clear its market cap floor");
+        const swap=await pairedSellInstructions(pump,{seller:new PublicKey(seller),coin:mint,pair:paired.mint,pairTokenProgram:paired.tokenProgram,sellRaw:total,minimumLamports:minimum});
+        const {signed}=await compile(seller,sellers.map(buyer=>buyer.wallet),[...instructions,...swap],600_000);
+        return signed;
+      }
       const limited=requiredOutput!==null||floorUsd!==undefined||afterBundleRaw!==undefined;
       const quote=await plugin.quoteSell(context,market,total,limited?0:500);
       let minimumOutput=requiredOutput;

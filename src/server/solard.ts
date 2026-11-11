@@ -1,3 +1,4 @@
+import { pairMint } from "./pair-launch";
 import { telegramLink, xLink } from "../../lib/launch-socials";
 import { coinWebsite } from "../../lib/coin-url";
 import { ApiError } from "../../lib/api-security";
@@ -302,7 +303,7 @@ export class SolardLaunchProvider implements LaunchProvider {
     const mint=input.token.mintSignerRef?.replace(/^launchseeds-mint-/,"");if(!mint)throw Error("Reserved mint missing");
     // Compile the real creation and grouped buys before publishing payment.
     // These unsent validation bytes are never returned to the browser.
-    await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint,metadata:{name:input.token.name,symbol:input.token.symbol,uri:input.metadataUri},devBuyLamports:input.settings.bundleLamports!,buyers:input.buyers.filter(b=>b.tranche===undefined),...(input.settings.feesTo?{feesTo:input.settings.feesTo}:{})});
+    await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint,metadata:{name:input.token.name,symbol:input.token.symbol,uri:input.metadataUri},devBuyLamports:input.settings.bundleLamports!,buyers:input.buyers.filter(b=>b.tranche===undefined),...(input.settings.feesTo?{feesTo:input.settings.feesTo}:{}),pairMint:pairMint()});
   }
   bundleContext: BundleContext | null = null;
   walletFor(name: string) {
@@ -662,7 +663,7 @@ export class SolardLaunchProvider implements LaunchProvider {
         const buyers=JSON.parse(plan.buyersJson) as import("./launch-bundle").BundleBuyer[];
         if(hash(JSON.stringify(scheduledCommitment(scheduledToken,choices,buyers)))!==plan.planHash)throw Error("Batch commitment does not match execution");
         // Tranche wallets buy after the launch, outside the bundle.
-        const intent=await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint:mintWallet.address,metadata:{name:input.name,symbol:input.symbol,uri:input.metadataUri},devBuyLamports:input.bundleLamports,buyers:buyers.filter(b=>b.tranche===undefined),...(choices.feesTo?{feesTo:choices.feesTo}:{})});
+        const intent=await prepareBundle(this.bundleContext,{fundingWallet:input.fundingWallet,mint:mintWallet.address,metadata:{name:input.name,symbol:input.symbol,uri:input.metadataUri},devBuyLamports:input.bundleLamports,buyers:buyers.filter(b=>b.tranche===undefined),...(choices.feesTo?{feesTo:choices.feesTo}:{}),pairMint:pairMint()});
         this.store.repo.tx(tx=>{
           const existing=tx.userBatches.byToken(input.tokenId);
           const tranches=choices.userBatches!.tranches??[];

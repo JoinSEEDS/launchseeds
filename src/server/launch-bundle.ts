@@ -62,6 +62,8 @@ export type BundleIntent = {
   metadata: { name: string; symbol: string; uri: string };
   /** Creator fees to this wallet; absent: native Pump holder rewards. */
   feesTo?: string;
+  /** The pump coin every buy was paired with; absent for SOL. */
+  pairMint?: string;
   /** The coin's funding (dev) wallet that signs creation. */
   fundingWallet?: string;
   superseded?: unknown[];

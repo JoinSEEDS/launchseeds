@@ -1,5 +1,6 @@
 /** Solard wiring for the launch bundle (launch-bundle.ts): one Jito bundle that
  * creates the coin and runs each column's buy transaction. */
+import { pairedBuyInstructions, pairedBuyMinimums, pairedCreateInstruction, resolvePair } from "./pair-launch";
 import {
   Connection,
   PublicKey,
@@ -163,6 +164,8 @@ export async function prepareBundle(
     buyers: BundleBuyer[];
     /** Creator-fee recipient instead of holder rewards. */
     feesTo?: string;
+    /** Pair every buy with this pump coin instead of SOL. */
+    pairMint?: string | null;
   },
 ): Promise<BundleIntent> {
   const pump = await import("@pump-fun/pump-sdk");
@@ -176,6 +179,16 @@ export async function prepareBundle(
 
   const buyers = input.buyers;
   const mintSigner = ctx.trader.signer(input.mint);
+  // Paired launches: created quoted in the pair coin, each wallet buys SOL -> pair -> coin.
+  const pairedMint = input.pairMint ?? null;
+  if (pairedMint) {
+    if (!feesTo) throw new Error("A paired launch needs a fee recipient");
+    const pair = await resolvePair(pump, ctx.connection, pairedMint);
+    const pairedCreate = await pairedCreateInstruction(pump, pair, { mint, user: funding, creator: feesTo, ...input.metadata });
+    const minimums = pairedBuyMinimums(pair, buyers.map((b) => BigInt(b.budgetLamports)));
+    const pairedBuys = await Promise.all(buyers.map((b, i) => pairedBuyInstructions(pump, pair, { buyer: new PublicKey(b.wallet), coin: mint, lamports: BigInt(b.budgetLamports), minimumOut: minimums[i]! })));
+    return compileBundle(ctx, core, input, pairedCreate, mintSigner, pairedBuys, 450_000);
+  }
   const create = await pump.PUMP_SDK.createV2Instruction({
     mint,
     user: funding,
@@ -216,6 +229,22 @@ export async function prepareBundle(
     state = buy.nextState; // sequential: each buy moves the curve for the next
     buys.push(buy.instructions);
   }
+  return compileBundle(ctx, core, input, create, mintSigner, buys, 300_000);
+}
+
+/** The bundle: the funding wallet creates the coin and funds every wallet, then
+ * one buy transaction per wallet, the last paying the Jito tip. */
+async function compileBundle(
+  ctx: BundleContext,
+  core: Core,
+  input: Parameters<typeof prepareBundle>[1],
+  create: TransactionInstruction,
+  mintSigner: Keypair,
+  buys: TransactionInstruction[][],
+  buyCuLimit: number,
+): Promise<BundleIntent> {
+  const buyers = input.buyers;
+  const funding = new PublicKey(input.fundingWallet);
   // The funding wallet creates the coin and sends every wallet its buy and reserve.
   const creation = [
     create,
@@ -257,7 +286,7 @@ export async function prepareBundle(
             ]
           : []),
       ],
-      cuLimit: 300_000,
+      cuLimit: buyCuLimit,
       priorityMicroLamports: 0,
     })),
   ]);
@@ -273,6 +302,7 @@ export async function prepareBundle(
   return {
     kind: "bundle",
     ...(input.feesTo ? { feesTo: input.feesTo } : {}),
+    ...(input.pairMint ? { pairMint: input.pairMint } : {}),
     fundingWallet: input.fundingWallet,
     transactions: transactions.map((b) => Buffer.from(b).toString("base64")),
     signatures,
@@ -362,6 +392,7 @@ export async function refreshBundle(
     devBuyLamports,
     buyers: plan.buyers,
     ...(plan.feesTo ? { feesTo: plan.feesTo } : {}),
+    pairMint: plan.pairMint ?? null,
   });
   return {
     ...fresh,
