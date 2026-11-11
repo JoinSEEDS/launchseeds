@@ -17,6 +17,11 @@ import { notifyLaunchWorker } from "./launch-wake";
 export const LAUNCH_DELAY_MS = 130_000;
 /** When each bundle wallet sells, in seconds after the buy is final. */
 export const SELL_AFTER_SECONDS = [0, 3, 5, 10];
+/** $SEEDS's bundle sells only while its market cap stays at or above this ([launchseeds] seeds_floor_usd). */
+export const seedsFloorUsd = (env: Record<string, string | undefined> = process.env) => {
+  const usd = Number(env.LAUNCHSEEDS_SEEDS_FLOOR_USD ?? 5000);
+  return Number.isFinite(usd) && usd > 0 ? usd : 0;
+};
 /** For up to this long after its time, a bundle wallet only sells while the
  * market cap stays at or above where the bundle left it; then at market. */
 export const HOLD_FLOOR_SECONDS = 60;
@@ -102,7 +107,8 @@ export function advanceQueue(store: Store, service: LaunchService, provider: Pro
       publishProject: true,
       scheduledAt: now() + LAUNCH_DELAY_MS,
       // One wallet per column; each sells on its own, spaced out after the buy.
-      userBatches: { proceedsWallet: treasury, columns: buys.map((buy, i) => ({ slots: [Number(buy)], exit: { kind: "after", seconds: SELL_AFTER_SECONDS[i]!, holdFloorSeconds: HOLD_FLOOR_SECONDS } })) },
+      // $SEEDS never sells below its USD floor; every other coin sells on its schedule.
+      userBatches: { proceedsWallet: treasury, columns: buys.map((buy, i) => ({ slots: [Number(buy)], exit: isSeeds && seedsFloorUsd() > 0 ? { kind: "floor", usd: seedsFloorUsd() } : { kind: "after", seconds: SELL_AFTER_SECONDS[i]!, holdFloorSeconds: HOLD_FLOOR_SECONDS } })) },
       bundleLamports: Number(buys.reduce((a, b) => a + b, 0n)),
       // The treasury is every coin's dev and fee recipient; each coin's share is tracked.
       feesTo: treasury,

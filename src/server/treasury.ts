@@ -29,13 +29,17 @@ export function seedBuys(treasuryLamports: bigint, baseFeeLamports: bigint, maxB
 }
 
 type TreasuryRepo = Pick<LaunchseedsRepo, "tokens" | "userBatches">;
-const DONE = new Set(["settled", "skipped"]);
+/** Bundle columns whose SOL is on its way: buying, or a sale or payout in flight. */
+const IN_FLIGHT = new Set(["buying", "exiting", "exited", "settling"]);
 
-/** A launch is still using the treasury until its bundle has sold and paid back. */
+/** A launch is using the treasury while it is being created or bought, and
+ * while a sale and its payout are in flight. Columns that simply hold (waiting
+ * for their sell rule, maybe for days) do not block the next launch; it spends
+ * only what the treasury actually has. */
 export function launchHoldsTreasury(repo: TreasuryRepo, token: Token) {
   if (token.status === "preparing" || token.status === "funding" || token.status === "deploying") return true;
   if (token.status !== "live") return false;
-  return repo.userBatches.byToken(token.id).some((row) => !DONE.has((JSON.parse(row.stateJson) as { status: string }).status));
+  return repo.userBatches.byToken(token.id).some((row) => IN_FLIGHT.has((JSON.parse(row.stateJson) as { status: string }).status));
 }
 
 /** One launch at a time: the next one waits for the last bundle's proceeds. */

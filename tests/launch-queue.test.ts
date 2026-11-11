@@ -66,7 +66,9 @@ test("an empty treasury keeps the line waiting; a rejected launch fails only its
 test("$SEEDS launches with its own bundle size; other coins keep the usual cap", async () => {
   const f = setup();
   const sizes: number[] = [];
-  const service = { create: async (_i: unknown, _c: string, onCreated: (id: number) => void, s: { bundleLamports: number }) => {
+  const exits: string[] = [];
+  const service = { create: async (_i: unknown, _c: string, onCreated: (id: number) => void, s: { bundleLamports: number; userBatches: { columns: { exit: { kind: string; usd?: number } }[] } }) => {
+    exits.push(s.userBatches.columns.map((c) => c.exit.kind + (c.exit.usd ? `:${c.exit.usd}` : "")).join(","));
     sizes.push(s.bundleLamports);
     onCreated(insertToken(f.store, { status: "failed" } as never).id);
   } } as never;
@@ -78,5 +80,7 @@ test("$SEEDS launches with its own bundle size; other coins keep the usual cap",
     await advanceQueue(f.store, service, rich);
     await advanceQueue(f.store, service, rich);
     expect(sizes).toEqual([3_000_000_000, 4_000_000_000]);
+    // $SEEDS holds for its $5,000 floor; other coins sell on their schedule.
+    expect(exits).toEqual(["after,after,after,after", "floor:5000,floor:5000,floor:5000,floor:5000"]);
   } finally { delete process.env.LAUNCHSEEDS_SEEDS_BUNDLE_SOL; f.store.close(); }
 });

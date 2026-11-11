@@ -45,7 +45,9 @@ test("a launch holds the treasury until its bundle has sold and paid back", () =
   const repo = (statuses: string[]) => ({ userBatches: { byToken: () => statuses.map((status) => ({ stateJson: JSON.stringify({ status }) })) } }) as never;
   const live = { id: 1, status: "live" } as never;
   expect(launchHoldsTreasury(repo([]), { id: 1, status: "funding" } as never)).toBe(true);
-  expect(launchHoldsTreasury(repo(["holding"]), live)).toBe(true);
+  expect(launchHoldsTreasury(repo(["holding"]), live)).toBe(false); // holding for its sell rule does not block
+  expect(launchHoldsTreasury(repo(["buying", "holding"]), live)).toBe(true);
+  expect(launchHoldsTreasury(repo(["settling"]), live)).toBe(true);
   expect(launchHoldsTreasury(repo(["exiting"]), live)).toBe(true);
   expect(launchHoldsTreasury(repo(["settled"]), live)).toBe(false);
   expect(launchHoldsTreasury(repo([]), { id: 1, status: "failed" } as never)).toBe(false);
