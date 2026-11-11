@@ -9,7 +9,8 @@ import {
 export const BUNDLE_BUYERS = 3;
 /** Left in each bundle wallet for its buy and the exit: fees and token-account rent. */
 export const BUYER_RESERVE_LAMPORTS = 14_000_000;
-export const JITO_TIP_LAMPORTS = 100_000;
+/** Jito ranks bundles by tip per compute unit; a launch bundle asks for ~1.6M CU. */
+export const JITO_TIP_LAMPORTS = 2_000_000;
 /** Each wallet's exit minimum: 102% of its buy budget. */
 export const EXIT_MINIMUM_BPS = 10_200n;
 /** The smallest launch buy one bundle wallet makes. */

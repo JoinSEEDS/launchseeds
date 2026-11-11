@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { dailyLoss, dailyLossLimit, launchHoldsTreasury, maxBundleLamports, MIN_SEED_BUY_LAMPORTS, SEED_WALLETS, seedBuys, seedLimit, TREASURY_RESERVE_LAMPORTS, TREASURY_WALLET } from "../src/server/treasury";
+import { JITO_TIP, dailyLoss, dailyLossLimit, launchHoldsTreasury, maxBundleLamports, MIN_SEED_BUY_LAMPORTS, SEED_WALLETS, seedBuys, seedLimit, TREASURY_RESERVE_LAMPORTS, TREASURY_WALLET } from "../src/server/treasury";
 
-const overhead = TREASURY_RESERVE_LAMPORTS + 1_000_000n + 100_000n + 4n * 14_000_000n;
+const overhead = TREASURY_RESERVE_LAMPORTS + 1_000_000n + JITO_TIP + 4n * 14_000_000n;
 
 test("the bundle buys the configured size, split over four wallets", () => {
   const buys = seedBuys(10_000_000_000n, 1_000_000n, 500_000_000n)!;

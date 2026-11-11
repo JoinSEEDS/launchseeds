@@ -13,7 +13,7 @@ export const SEED_WALLETS = 4;
 export const TREASURY_RESERVE_LAMPORTS = 60_000_000n;
 /** Each bundle wallet's network and rent reserve (src/server/launch-bundle.ts). */
 export const SEED_WALLET_RESERVE_LAMPORTS = 14_000_000n;
-export const JITO_TIP = 100_000n;
+export const JITO_TIP = 2_000_000n;
 /** Smallest buy one bundle wallet makes. */
 export const MIN_SEED_BUY_LAMPORTS = 30_000_000n;
 
