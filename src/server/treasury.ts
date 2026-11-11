@@ -43,12 +43,12 @@ export const treasuryBusy = (repo: TreasuryRepo) =>
   repo.tokens.byFundingWalletName(TREASURY_WALLET).some((token) => launchHoldsTreasury(repo, token));
 
 const DAY_MS = 86_400_000;
-/** Why a wallet may not launch now, or null: one launch per wallet in 24 hours,
- * and at most `daily` launches in 24 hours for everyone. Failed launches count too. */
-export function seedLimit(tokens: Pick<Token, "createdAt" | "status" | "creatorWallet">[], wallet: string, now: number, daily: number) {
+/** Why a wallet may not launch now, or null: at most `perWallet` launches per
+ * wallet and `daily` for everyone in 24 hours. Failed launches count too. */
+export function seedLimit(tokens: Pick<Token, "createdAt" | "status" | "creatorWallet">[], wallet: string, now: number, daily: number, perWallet = 5) {
   const recent = tokens.filter((t) => t.createdAt > now - DAY_MS);
-  if (recent.some((t) => t.creatorWallet === wallet)) return "This wallet already launched a coin today. Try again tomorrow.";
-  if (recent.length >= daily) return "Today's free launches are used up. Try again tomorrow.";
+  if (recent.filter((t) => t.creatorWallet === wallet).length >= perWallet) return `This wallet already launched ${perWallet} ${perWallet === 1 ? "coin" : "coins"} today. Try again tomorrow.`;
+  if (recent.length >= daily) return "Today's launches are used up. Try again tomorrow.";
   return null;
 }
 

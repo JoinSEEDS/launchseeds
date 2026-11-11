@@ -12,7 +12,7 @@ export default function LaunchPage() {
         <div className="docs-hero container">
           {promo ? <div className="hero-tag promo"><svg className="icon" style={{ width: "14px", height: "14px" }}><use href="#i-leaf" /></svg>{promo}</div> : null}
           <h1>Launch a <em>token</em></h1>
-          <p>One launch per wallet a day.</p>
+          <p>Give your coin a purpose. Its trading fees pay the people who complete its challenges, so you can reward real actions.</p>
         </div>
       </header>
       <main className="container launch-main" data-seed-launch="">

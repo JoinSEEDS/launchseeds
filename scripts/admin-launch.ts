@@ -28,7 +28,8 @@ const image = ((await upload.json()) as { image: string }).image;
 
 const store = getStore(), capability = createHash("sha256").update(randomBytes(32)).digest("hex"), key = queueKey(capability);
 const input = { name, symbol, description, image, website: plan.website, x: plan.x, telegram: plan.telegram, devBuySol: "0" };
-store.repo.launchQueue.add({ key, capability, wallet, inputJson: JSON.stringify(input), now: Date.now() });
+const entry = store.repo.launchQueue.add({ key, capability, wallet, inputJson: JSON.stringify(input), now: Date.now(), scheduledFor: Date.now() });
+store.repo.launchQueue.approve(entry.id, wallet, Date.now()); // an admin's own launch goes now
 console.log(`Queued ${key}; the web server starts it when the treasury is free.`);
 for (let i = 0; i < 120; i++) {
   const state = queueState(store, key);

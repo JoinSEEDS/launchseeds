@@ -123,6 +123,11 @@ export const runtimeSchemas = {
     error: z.string().nullable().default(null),
     createdAt: Time,
     startedAt: Time.nullable().default(null),
+    /** Its launch time: each coin's slot comes a gap after the one before it. */
+    scheduledFor: Time.nullable().default(null),
+    /** An admin launched it early with "Launch now". */
+    approvedAt: Time.nullable().default(null),
+    approvedBy: Address.nullable().default(null),
   }),
   /** Every signed challenge action, by sha256 of its signature, so none runs twice. */
   signedActions: z.object({

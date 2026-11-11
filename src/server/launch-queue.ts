@@ -49,16 +49,43 @@ export function queueState(store: Store, key: string, now = Date.now()) {
     return { key, status: "started" as const, coinUrl: id ? `/coin/${encodeURIComponent(id)}` : null };
   }
   if (entry.status === "failed") return { key, status: "failed" as const, error: entry.error ?? "The launch could not start." };
-  const ahead = store.repo.launchQueue.waiting().filter((w) => w.id < entry.id).length;
-  const busy = treasuryBusy(store.repo);
-  const current = busy ? Math.max(busyUntil(store, now) - now, 30_000) : 0;
-  return { key, status: "waiting" as const, position: ahead + 1, ahead, etaSeconds: Math.round((current + ahead * LAUNCH_SLOT_MS) / 1000), note: entry.error };
+  const waiting = store.repo.launchQueue.waiting();
+  const ahead = waiting.filter((w) => w.id < entry.id).length;
+  const at = slotOf(entry);
+  const busy = treasuryBusy(store.repo) ? Math.max(busyUntil(store, now) - now, 30_000) : 0;
+  return { key, status: "waiting" as const, position: ahead + 1, ahead, scheduledFor: at, etaSeconds: Math.round(Math.max(at - now, busy, 0) / 1000), note: entry.error };
+}
+
+/** Minutes between two coins' launch times ([launchseeds] queue_gap_minutes). */
+export const queueGapMs = (env: Record<string, string | undefined> = process.env) => {
+  const minutes = Number(env.LAUNCHSEEDS_QUEUE_GAP_MINUTES ?? 20);
+  return (Number.isFinite(minutes) && minutes >= 0 ? minutes : 20) * 60_000;
+};
+/** A request's launch time; "Launch now" makes it due at once. */
+const slotOf = (w: { scheduledFor: number | null; createdAt: number; approvedAt: number | null }) =>
+  w.approvedAt !== null ? Math.min(w.approvedAt, w.scheduledFor ?? w.approvedAt) : (w.scheduledFor ?? w.createdAt + queueGapMs()); // a row from before launch times waits a gap
+/** The next free launch time: a gap after the latest one given out, or a gap from now. */
+export function nextSlot(store: Store, now = Date.now()) {
+  return Math.max(now, store.repo.launchQueue.lastSlot() ?? 0) + queueGapMs();
+}
+
+/** The public line: every waiting launch in order with its time and description,
+ * and the ones started or removed lately. No wallets. */
+export function queueList(store: Store, now = Date.now()) {
+  const card = (w: { id: number; key: string; inputJson: string; createdAt: number; scheduledFor: number | null; approvedAt: number | null }) => {
+    const input = JSON.parse(w.inputJson) as { name?: string; symbol?: string; image?: string; description?: string };
+    return { key: w.key, name: input.name ?? "", symbol: input.symbol ?? "", image: input.image ?? "", description: (input.description ?? "").slice(0, 280), createdAt: w.createdAt, scheduledFor: slotOf(w), launchingNow: w.approvedAt !== null };
+  };
+  const waiting = store.repo.launchQueue.waiting().map((w, i) => ({ ...card(w), position: i + 1 }));
+  const recent = store.repo.launchQueue.recent(now - 86_400_000).map((w) => ({ ...card(w), status: w.status, coinUrl: w.status === "started" ? queueState(store, w.key, now)?.coinUrl ?? null : null, error: w.status === "failed" ? w.error : null }));
+  return { treasuryBusy: treasuryBusy(store.repo), now, waiting, recent };
 }
 
 /** Launches the oldest waiting request if the treasury is free. Safe to call often. */
 export function advanceQueue(store: Store, service: LaunchService, provider: Provider, now = () => Date.now()) {
   return oneLaunchAtATime(async () => {
-    const head = store.repo.launchQueue.waiting()[0];
+    // The coin whose time has come first; "Launch now" makes a coin due at once.
+    const head = store.repo.launchQueue.waiting().filter((w) => slotOf(w) <= now()).sort((a, b) => slotOf(a) - slotOf(b) || a.id - b.id)[0];
     if (!head || treasuryBusy(store.repo)) return null;
     const lossLimit = dailyLossLimit();
     if (lossLimit > 0n && dailyLoss(store.repo, now()) >= lossLimit) { store.repo.launchQueue.note(head.id, "Launches are paused for today; your turn comes after the pause."); return null; }

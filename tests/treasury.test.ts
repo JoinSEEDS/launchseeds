@@ -34,9 +34,11 @@ test("one launch per wallet a day and a daily cap for everyone; failed launches 
   const now = 10 * 86_400_000, a = "A".repeat(44), b = "B".repeat(44);
   const token = (creatorWallet: string, ago: number, status = "live") => ({ creatorWallet, createdAt: now - ago, status }) as never;
   expect(seedLimit([], a, now, 20)).toBeNull();
-  expect(seedLimit([token(a, 3_600_000)], a, now, 20)).toContain("already launched");
-  expect(seedLimit([token(a, 25 * 3_600_000)], a, now, 20)).toBeNull();
-  expect(seedLimit([token(a, 3_600_000, "failed")], a, now, 20)).toContain("already launched");
+  const five = [1, 2, 3, 4, 5].map((h) => token(a, h * 3_600_000));
+  expect(seedLimit(five.slice(0, 4), a, now, 20)).toBeNull();
+  expect(seedLimit(five, a, now, 20)).toContain("already launched 5 coins");
+  expect(seedLimit([token(a, 25 * 3_600_000)], a, now, 20, 1)).toBeNull();
+  expect(seedLimit([token(a, 3_600_000, "failed")], a, now, 20, 1)).toContain("already launched 1 coin");
   expect(seedLimit([token(b, 1), token(b, 2)], a, now, 2)).toContain("used up");
 });
 test("a launch holds the treasury until its bundle has sold and paid back", () => {

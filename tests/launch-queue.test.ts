@@ -39,7 +39,7 @@ test("requests launch in arrival order, one at a time, each told its place and w
     const second = queueState(f.store, b)!;
     expect(second).toMatchObject({ status: "waiting", position: 1, ahead: 0 });
     expect((second as { etaSeconds: number }).etaSeconds).toBeGreaterThan(0);
-    expect((queueState(f.store, c) as { etaSeconds: number }).etaSeconds).toBeGreaterThan((second as { etaSeconds: number }).etaSeconds);
+    expect((queueState(f.store, c) as { etaSeconds: number }).etaSeconds).toBeGreaterThanOrEqual((second as { etaSeconds: number }).etaSeconds);
     // The first launch finishes; the next one goes.
     f.store.repo.tokens.all().forEach((t) => f.store.data.database.tokens.update(t.id, { status: "failed" } as never));
     await advanceQueue(f.store, f.service, f.provider);

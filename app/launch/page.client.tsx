@@ -5,12 +5,12 @@ import { getJson, postJson, uploadImage } from "../../lib/client-request";
 import { seedMessage, type SeedRequest } from "../../lib/seed-message";
 import { TICKER_PATTERN, normalizeTicker } from "../../lib/ticker";
 import { validateImage } from "../../lib/launch-ui";
+import { rememberLaunch } from "../../lib/my-launches";
 
 type QueueState =
   | { key: string; status: "started"; coinUrl: string | null }
   | { key: string; status: "failed"; error: string }
-  | { key: string; status: "waiting"; position: number; ahead: number; etaSeconds: number; note?: string | null };
-const wait = (seconds: number) => (seconds < 60 ? "less than a minute" : `about ${Math.round(seconds / 60)} min`);
+  | { key: string; status: "waiting"; position: number; ahead: number; scheduledFor: number; etaSeconds: number; note?: string | null };
 
 type Config = { launchEnabled: boolean; imageGeneration?: boolean; seedBundleLamports?: number | null };
 
@@ -58,18 +58,13 @@ export default function mount() {
       generate.disabled = false;
     }
   });
-  /** Shows the place in line until the launch starts, then opens its coin page. */
-  async function follow(state: QueueState): Promise<void> {
-    for (;;) {
-      if (state.status === "started") { if (state.coinUrl) location.assign(state.coinUrl); return; }
-      if (state.status === "failed") throw new Error(state.error);
-      bundle.textContent = state.ahead
-        ? `You're #${state.position} in line: ${state.ahead} ${state.ahead === 1 ? "launch" : "launches"} ahead of you, ${wait(state.etaSeconds)}. It starts by itself, even if you close this page.`
-        : `You're next: ${wait(state.etaSeconds)}. ${state.note ?? "It starts by itself, even if you close this page."}`;
-      submit.textContent = "Waiting for your turn…";
-      await new Promise((r) => setTimeout(r, 5_000));
-      state = await getJson<QueueState>(`/api/seeds?key=${state.key}`);
-    }
+  /** A started launch opens its coin page; a waiting one opens the queue with this coin
+   * highlighted, which follows it and notifies when it deploys. */
+  function follow(state: QueueState) {
+    if (state.status === "started") { if (state.coinUrl) location.assign(state.coinUrl); return; }
+    if (state.status === "failed") throw new Error(state.error);
+    rememberLaunch(state.key);
+    location.assign(`/queue?mine=${state.key}`);
   }
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -100,11 +95,13 @@ export default function mount() {
         issuedAt: Date.now(),
         nonce,
       };
+      // Ask now, while the click counts as a user gesture: the queue page notifies on deploy.
+      if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission().catch(() => {});
       submit.textContent = "Sign in your wallet…";
       const signed = await provider.signMessage(new TextEncoder().encode(seedMessage(seed)), "utf8");
       submit.textContent = "Launching…";
       const result = await postJson<QueueState>("/api/seeds", { ...seed, signature: bs58.encode(signed.signature) }, { timeoutMs: 120_000 });
-      await follow(result);
+      follow(result);
     } catch (error) {
       fail(error instanceof Error ? error.message : "The launch failed.");
     } finally {

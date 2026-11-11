@@ -421,3 +421,6 @@ p { margin: 0; }
 .footer-ca a { font-weight: 700; color: var(--green-text); }
 .footer-ca .mono { overflow-wrap: anywhere; }
 .docs-hero .hero-tag.promo { margin-bottom: 14px; }
+.task.mine { outline: 3px solid #7DB378; outline-offset: 2px; background: var(--mint); }
+#queue-root > .notice { margin-bottom: 14px; display: flex; flex-direction: column; gap: 4px; }
+#queue-root > .notice.hidden { display: none; }

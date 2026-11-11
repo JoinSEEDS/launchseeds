@@ -10,7 +10,7 @@ import { publicRouteError } from "../../../src/server/route-errors";
 import { maxBundleLamports, seedLimit } from "../../../src/server/treasury";
 import { isSeedsSymbol } from "../../../src/domain/seeds-split";
 import { adminWallets } from "../../../src/server/admin-wallets";
-import { advanceQueue, queueKey, queueState } from "../../../src/server/launch-queue";
+import { advanceQueue, nextSlot, queueKey, queueState } from "../../../src/server/launch-queue";
 
 const limiter = new IngressRateLimiter("seed-launch", 5, 10 * 60_000);
 const MAX_AGE_MS = 5 * 60_000;
@@ -76,10 +76,10 @@ export async function POST(request: Request): Promise<Response> {
     if (!store.repo.launchQueue.byCapability(capability)) {
       // Waiting requests count toward the daily limits like launches do.
       const waiting = store.repo.launchQueue.waiting().map((w) => ({ createdAt: w.createdAt, status: "queued", creatorWallet: w.wallet }));
-      const limited = seedLimit([...store.repo.tokens.all(), ...waiting] as never, seed.wallet, now, Number(process.env.LAUNCHSEEDS_DAILY_LAUNCHES || 20));
+      const limited = seedLimit([...store.repo.tokens.all(), ...waiting] as never, seed.wallet, now, Number(process.env.LAUNCHSEEDS_DAILY_LAUNCHES || 20), Number(process.env.LAUNCHSEEDS_WALLET_DAILY_LAUNCHES || 5));
       if (limited) throw new ApiError(limited, 429);
       const input = { name: seed.name, symbol: seed.symbol, description: seed.description, image: seed.image, website: "", x: seed.x, telegram: seed.telegram, devBuySol: "0" };
-      store.repo.launchQueue.add({ key, capability, wallet: seed.wallet, inputJson: JSON.stringify(input), now });
+      store.repo.launchQueue.add({ key, capability, wallet: seed.wallet, inputJson: JSON.stringify(input), now, scheduledFor: nextSlot(store, now) });
     }
     // Start right away when nothing is ahead and the treasury is free.
     const provider = await getLaunchProvider();

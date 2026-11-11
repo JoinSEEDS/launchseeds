@@ -30,7 +30,7 @@ test("the free launch form signs with the creator's wallet and posts the coin", 
       const path = String(url);
       if (path.includes("launch-config")) return Response.json({ launchEnabled: true, seedBundleLamports: 1_500_000_000 });
       if (path.endsWith("/api/media")) return Response.json({ image: "/api/media/" + "a".repeat(64) + ".png" });
-      if (path.endsWith("/api/seeds")) { payload = JSON.parse(String(options!.body)); return Response.json({ key: "k".repeat(32), status: "waiting", position: 2, ahead: 1, etaSeconds: 400 }); }
+      if (path.endsWith("/api/seeds")) { payload = JSON.parse(String(options!.body)); return Response.json({ key: "a".repeat(32), status: "waiting", position: 2, ahead: 1, approved: false, etaSeconds: null }); }
       throw new Error("Unexpected request " + path);
     }) as typeof fetch;
     const cleanup = mount();
@@ -50,10 +50,8 @@ test("the free launch form signs with the creator's wallet and posts the coin", 
     expect(await ed25519VoteVerifier.verify({ wallet, signature: payload.signature, message: seedMessage({ ...payload, description: "Other" }) })).toBe(false);
     expect(await ed25519VoteVerifier.verify({ wallet, signature: payload.signature, message: seedMessage(payload) })).toBe(true);
     expect(bs58.decode(payload.signature)).toHaveLength(64);
-    // Queued behind another launch: the launcher sees their place and a rough wait.
-    expect(get("seed-bundle").textContent).toContain("#2 in line");
-    expect(get("seed-bundle").textContent).toContain("about 7 min");
-    expect(assigned).toBe("");
+    // Queued: the launcher goes to the queue with their coin picked out.
+    expect(assigned).toBe("/queue?mine=" + "a".repeat(32));
     cleanup?.();
   } finally {
     dom.window.close();
