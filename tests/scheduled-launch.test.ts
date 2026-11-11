@@ -340,3 +340,15 @@ test("old /schedule links redirect to the coin page", async () => {
   expect(response.status).toBe(308);
   expect(response.headers.get("location")).toBe(`/coin/${hash}`);
 });
+
+test("the launcher stays the coin's owner on LaunchSeeds after preparation; on chain the treasury creates it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "launchseeds-owner-"));
+  const f = fixture(join(dir, "test.sqlite"));
+  try {
+    const owner = "7GkPq2RdT8xeFq3N9tLmBz8ukV1cHn2eQ7saLm4ra8Pz";
+    const status = await new LaunchService(f.store, f.provider).create(input, "c".repeat(64), undefined, f.settings, owner);
+    expect(f.store.repo.tokens.getByHandle(status.handle)!.creatorWallet).toBe(owner);
+  } finally {
+    f.close();
+  }
+});

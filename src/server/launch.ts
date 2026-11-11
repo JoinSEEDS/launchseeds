@@ -304,7 +304,8 @@ export class LaunchService {
         return tx.tokens.markPrepared(tokenId, {
           fundingWallet: prepared.fundingWallet,
           fundingWalletName: prepared.fundingWalletName,
-          creatorWallet: prepared.rewardWallet,
+          // The launcher owns the coin on LaunchSeeds; on chain its creator is the treasury.
+          creatorWallet: t.creatorWallet ?? prepared.rewardWallet,
           rewardWallet: prepared.rewardWallet,
           mintSignerRef: prepared.mintSignerRef,
           metadataUri: prepared.metadataUri,
