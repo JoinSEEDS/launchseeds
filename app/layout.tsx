@@ -30,7 +30,7 @@ export default function RootLayout({ children }: { children: any }) {
           <div className="container">
             <div className="footer-brand"><img src="/logo.png" alt="" width="32" height="32" /><div><b>{SITE_NAME}</b>A launchpad where trading rewards real-world action.</div></div>
             {seeds ? <div className="footer-ca"><a href="/seeds">$SEEDS</a><span className="mono">{seeds}</span><button className="btn btn-white btn-xs" type="button" data-copy={seeds}>Copy</button></div> : null}
-            <div className="footer-links"><a href="/challenges">Challenges</a><a href="/seeds">$SEEDS</a><a href="/docs">Docs</a></div>
+            <div className="footer-links"><a href="/challenges">Challenges</a><a href="/seeds">$SEEDS</a><a href="/docs">Docs</a><a href="https://x.com/launchseeds" target="_blank" rel="noopener noreferrer">X</a><a href="https://github.com/JoinSEEDS" target="_blank" rel="noopener noreferrer">GitHub</a></div>
           </div>
         </footer>
       </body>
